@@ -8,56 +8,74 @@
 
 #include "RP_Utils.mqh"
 
-//--- Extern inputs
-extern bool   Use_Spread_Filter;
-extern double Spread_Alert_Multiplier;
-extern double Spread_Block_Multiplier;
+// NO extern/input here — reads g_use_spread_filter, g_spread_alert_multiplier,
+// g_spread_block_multiplier from globals
 
-//--- Rolling spread buffer
+//--- Rolling spread buffer (100 ticks)
 double g_spread_buffer[100];
 int    g_spread_idx   = 0;
 int    g_spread_count = 0;
 
 //+------------------------------------------------------------------+
+//| Get current spread in pips                                        |
+//+------------------------------------------------------------------+
+double GetCurrentSpreadPips()
+{
+   double pip_val = PipValue();
+   if(pip_val <= 0.0) return 0.0;
+   return (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD)
+          * SymbolInfoDouble(_Symbol, SYMBOL_POINT) / pip_val;
+}
+
+//+------------------------------------------------------------------+
+//| Get average spread from rolling buffer                            |
+//+------------------------------------------------------------------+
+double GetAverageSpread()
+{
+   int cnt = (g_spread_count < 100) ? g_spread_count : 100;
+   if(cnt <= 0) return 0.0;
+
+   double sum = 0.0;
+   for(int i = 0; i < cnt; i++)
+      sum += g_spread_buffer[i];
+
+   return sum / cnt;
+}
+
+//+------------------------------------------------------------------+
 //| Update spread filter (called every tick)                          |
+//| Blocked: cur > avg * block_multiplier (3.0)                       |
+//|   → block entry, block alert cấp 2                               |
+//| Warning: cur > avg * alert_multiplier (2.0)                       |
+//|   → score -10 tạm thời, entry vẫn hoạt động với warning          |
 //+------------------------------------------------------------------+
 void UpdateSpreadFilter()
 {
-   double pip_val = PipValue();
-   if(pip_val <= 0) return;
+   //--- Always update spread data (even if filter is off)
+   g_current_spread_pips = GetCurrentSpreadPips();
 
-   double current_spread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD)
-                           * SymbolInfoDouble(_Symbol, SYMBOL_POINT) / pip_val;
-
-   // Update rolling buffer
-   g_spread_buffer[g_spread_idx % 100] = current_spread;
+   //--- Update rolling buffer
+   g_spread_buffer[g_spread_idx % 100] = g_current_spread_pips;
    g_spread_idx++;
    if(g_spread_count < 100) g_spread_count++;
 
-   // Calculate average
-   double sum = 0;
-   int cnt = (g_spread_count < 100) ? g_spread_count : 100;
-   for(int i = 0; i < cnt; i++)
-      sum += g_spread_buffer[i];
-   double avg = (cnt > 0) ? sum / cnt : current_spread;
+   g_average_spread_pips = GetAverageSpread();
 
-   // Update globals
-   g_current_spread_pips = current_spread;
-   g_average_spread_pips = avg;
-
-   if(!Use_Spread_Filter)
+   //--- Check filter toggle
+   if(!g_use_spread_filter)
    {
       g_spread_blocked = false;
       g_spread_warning = false;
       return;
    }
 
-   if(avg > 0 && current_spread > avg * Spread_Block_Multiplier)
+   //--- Classify spread status
+   if(g_average_spread_pips > 0.0 && g_current_spread_pips > g_average_spread_pips * g_spread_block_multiplier)
    {
       g_spread_blocked = true;
-      g_spread_warning = true;
+      g_spread_warning = false;  // Blocked supersedes warning
    }
-   else if(avg > 0 && current_spread > avg * Spread_Alert_Multiplier)
+   else if(g_average_spread_pips > 0.0 && g_current_spread_pips > g_average_spread_pips * g_spread_alert_multiplier)
    {
       g_spread_blocked = false;
       g_spread_warning = true;
@@ -70,32 +88,23 @@ void UpdateSpreadFilter()
 }
 
 //+------------------------------------------------------------------+
-//| Get spread score adjustment                                       |
+//| Get spread temporary score adjustment                             |
+//| Blocked → -15, Warning → -10, Normal → 0                         |
 //+------------------------------------------------------------------+
-double GetSpreadScoreAdjustment()
+double GetSpreadTempScoreAdj()
 {
-   if(!Use_Spread_Filter) return 0.0;
+   if(!g_use_spread_filter) return 0.0;
    if(g_spread_blocked) return -15.0;
    if(g_spread_warning) return -10.0;
    return 0.0;
 }
 
 //+------------------------------------------------------------------+
-//| Check if spread is blocking                                       |
+//| Check if spread is blocking entries                               |
 //+------------------------------------------------------------------+
 bool IsSpreadBlocked()
 {
    return g_spread_blocked;
 }
 
-//+------------------------------------------------------------------+
-//| Get spread display color                                          |
-//+------------------------------------------------------------------+
-color GetSpreadColor()
-{
-   if(g_spread_blocked) return clrRed;
-   if(g_spread_warning) return clrYellow;
-   return clrWhite;
-}
-
-#endif
+#endif // RP_SPREADFILTER_MQH

@@ -1,26 +1,30 @@
 //+------------------------------------------------------------------+
 //|                                            RP_DynamicDecay.mqh   |
 //|                        Reaction Point Indicator v3.0              |
-//|                        Module B — Dynamic Decay                   |
+//|                        Module B — Dynamic Score Decay             |
 //+------------------------------------------------------------------+
 #ifndef RP_DYNAMICDECAY_MQH
 #define RP_DYNAMICDECAY_MQH
 
 #include "RP_Utils.mqh"
 
-//--- Extern inputs
-extern bool Use_Dynamic_Score;
+// NO extern/input here — reads g_use_dynamic_score, g_decay_interval_bars,
+// g_decay_points_per_interval, g_max_rp_age_bars from globals
 
 //+------------------------------------------------------------------+
 //| Calculate decay penalty for an RP                                 |
+//| - penalty based on bars since last event (formed or tested)       |
+//| - extra +10 if beyond max age                                     |
+//| - deactivate if 2x max age AND score < 80                        |
 //+------------------------------------------------------------------+
 double CalcDecayPenalty(int rp_index)
 {
-   if(!Use_Dynamic_Score) return 0.0;
+   if(!g_use_dynamic_score) return 0.0;
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
 
    SReactionPoint &rp = g_rp_array[rp_index];
    int current_bar = Bars(_Symbol, PERIOD_CURRENT) - 1;
+
    int bars_since_formed = current_bar - rp.bar_formed;
    if(bars_since_formed < 0) bars_since_formed = 0;
 
@@ -29,7 +33,8 @@ double CalcDecayPenalty(int rp_index)
    int bars_since_event = current_bar - last_event_bar;
    if(bars_since_event < 0) bars_since_event = 0;
 
-   double penalty = 0;
+   // Base decay penalty
+   double penalty = 0.0;
    if(g_decay_interval_bars > 0)
       penalty = ((double)bars_since_event / g_decay_interval_bars) * g_decay_points_per_interval;
 
@@ -37,15 +42,22 @@ double CalcDecayPenalty(int rp_index)
    if(bars_since_formed > g_max_rp_age_bars)
       penalty += 10.0;
 
-   // Hide extremely old low-score RP
-   if(bars_since_formed > 2 * g_max_rp_age_bars && rp.base_score < 80)
+   // Deactivate extremely old low-score RP
+   if(bars_since_formed > 2 * g_max_rp_age_bars && rp.final_score < 80.0)
+   {
       rp.is_active = false;
+      if(rp_index < ArraySize(g_rp_dirty))
+         g_rp_dirty[rp_index] = true;
+   }
 
    return penalty;
 }
 
 //+------------------------------------------------------------------+
 //| Calculate recent bonus for an RP                                  |
+//| CHỈ dùng closed bars [1..N], KHÔNG BAO GIỜ bar[0]                |
+//| - Reaction confirmed in bars[1..5] → +15                         |
+//| - Test without break in bars[1..10] → +8                         |
 //+------------------------------------------------------------------+
 double CalcRecentBonus(int rp_index)
 {
@@ -53,83 +65,71 @@ double CalcRecentBonus(int rp_index)
 
    SReactionPoint &rp = g_rp_array[rp_index];
 
-   // Anti-repainting: ONLY use closed bars [1..N], NEVER bar[0]
-   double bonus = 0.0;
+   // Check bars 1-5 for confirmed reaction
+   // (candle touches zone + closes in reaction direction + move >= min_move)
+   double min_move;
+   if(g_use_adaptive_reaction)
+      min_move = SafeATR(14) * g_reaction_atr_multiplier;
+   else
+      min_move = PipsToPrice(g_min_reaction_move_pips);
 
-   // Check bars 1-5 for reaction (candle confirming near zone)
    for(int i = 1; i <= 5; i++)
    {
-      double low_i  = iLow(_Symbol, PERIOD_CURRENT, i);
-      double high_i = iHigh(_Symbol, PERIOD_CURRENT, i);
-      double close_i = iClose(_Symbol, PERIOD_CURRENT, i);
-      double open_i  = iOpen(_Symbol, PERIOD_CURRENT, i);
-
-      if(low_i == 0 || high_i == 0) continue;
+      double h = RP_High(i);
+      double l = RP_Low(i);
+      double c = RP_Close(i);
+      if(h == 0.0 || l == 0.0) continue;
 
       // Check if bar touches the zone
-      bool touches_zone = (low_i <= rp.zone_high && high_i >= rp.zone_low);
+      bool touches_zone = (l <= rp.zone_high && h >= rp.zone_low);
       if(!touches_zone) continue;
 
-      // Check for confirming pattern (rejection candle)
-      double range = high_i - low_i;
-      if(range <= 0) continue;
-
+      // Check reaction direction + min move
       if(rp.rp_type == RP_SUPPORT)
       {
-         // Bullish rejection: close > open, lower wick significant
-         double lower_wick = MathMin(open_i, close_i) - low_i;
-         if(close_i > open_i && lower_wick >= range * 0.3)
-         {
-            bonus = 15.0;
-            break;
-         }
+         // Price touched support zone, then moved up
+         double move_up = c - rp.zone_low;
+         if(c > rp.zone_high && move_up >= min_move)
+            return 15.0;
       }
-      else
+      else // RP_RESISTANCE
       {
-         // Bearish rejection: close < open, upper wick significant
-         double upper_wick = high_i - MathMax(open_i, close_i);
-         if(close_i < open_i && upper_wick >= range * 0.3)
-         {
-            bonus = 15.0;
-            break;
-         }
+         // Price touched resistance zone, then moved down
+         double move_down = rp.zone_high - c;
+         if(c < rp.zone_low && move_down >= min_move)
+            return 15.0;
       }
    }
 
-   // Check bars 1-10 for test without break (if no reaction found)
-   if(bonus < 15.0)
+   // Check bars 1-10 for test without break
+   for(int i = 1; i <= 10; i++)
    {
-      for(int i = 1; i <= 10; i++)
-      {
-         double low_i  = iLow(_Symbol, PERIOD_CURRENT, i);
-         double high_i = iHigh(_Symbol, PERIOD_CURRENT, i);
-         double close_i = iClose(_Symbol, PERIOD_CURRENT, i);
+      double h = RP_High(i);
+      double l = RP_Low(i);
+      double c = RP_Close(i);
+      if(h == 0.0 || l == 0.0) continue;
 
-         if(low_i == 0) continue;
+      bool touches_zone = (l <= rp.zone_high && h >= rp.zone_low);
+      if(!touches_zone) continue;
 
-         bool touches_zone = (low_i <= rp.zone_high && high_i >= rp.zone_low);
-         if(!touches_zone) continue;
+      // Test without break: touched zone but close didn't exceed breakout threshold
+      bool held = true;
+      if(rp.rp_type == RP_SUPPORT && c < rp.zone_low - PipsToPrice(g_breakout_confirm_pips))
+         held = false;
+      if(rp.rp_type == RP_RESISTANCE && c > rp.zone_high + PipsToPrice(g_breakout_confirm_pips))
+         held = false;
 
-         // Test without break: bar touched zone but didn't close beyond
-         bool held = true;
-         if(rp.rp_type == RP_SUPPORT && close_i < rp.zone_low - PipsToPrice(g_breakout_confirm_pips))
-            held = false;
-         if(rp.rp_type == RP_RESISTANCE && close_i > rp.zone_high + PipsToPrice(g_breakout_confirm_pips))
-            held = false;
-
-         if(touches_zone && held)
-         {
-            bonus = 8.0;
-            break;
-         }
-      }
+      if(held)
+         return 8.0;
    }
 
-   return bonus;
+   return 0.0;
 }
 
 //+------------------------------------------------------------------+
-//| Update decay for all active RPs                                   |
+//| Update decay + opacity for all active RPs                         |
+//| Opacity decays linearly with age, floor at 30%                    |
+//| Formula: opacity = max(30, initial - (bars/max_age)*(initial-30)) |
 //+------------------------------------------------------------------+
 void UpdateAllDecay()
 {
@@ -139,17 +139,27 @@ void UpdateAllDecay()
    {
       if(!g_rp_array[i].is_active) continue;
 
-      int bars_since_formed = current_bar - g_rp_array[i].bar_formed;
-      if(bars_since_formed < 0) bars_since_formed = 0;
+      int bars_since = current_bar - g_rp_array[i].bar_formed;
+      if(bars_since < 0) bars_since = 0;
 
-      // Update display opacity (decay visual)
-      double max_age = (double)g_max_rp_age_bars;
-      if(max_age <= 0) max_age = 300;
+      // Initial opacity based on RP level
+      double initial_opacity;
+      switch(g_rp_array[i].rp_level)
+      {
+         case RP_PREMIUM: initial_opacity = 80.0; break;
+         case RP_LEVEL1:  initial_opacity = 70.0; break;
+         case RP_LEVEL2:  initial_opacity = 50.0; break;
+         case RP_LEVEL3:  initial_opacity = 35.0; break;
+         default:         initial_opacity = 30.0; break;
+      }
 
-      double opacity = 100.0 - ((double)bars_since_formed / max_age * 70.0);
-      opacity = MathMax(opacity, 30.0); // Floor 30%
-      g_rp_array[i].display_opacity = opacity;
+      double max_age = (g_max_rp_age_bars > 0) ? (double)g_max_rp_age_bars : 300.0;
+      double decay_ratio = (double)bars_since / max_age;
+      if(decay_ratio > 1.0) decay_ratio = 1.0;
+
+      double opacity = initial_opacity - decay_ratio * (initial_opacity - 30.0);
+      g_rp_array[i].display_opacity = MathMax(30.0, opacity);
    }
 }
 
-#endif
+#endif // RP_DYNAMICDECAY_MQH
