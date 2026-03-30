@@ -4,15 +4,23 @@
 **Tổng:** 1 main `.mq5` + 16 `.mqh` includes
 **Mỗi prompt = 1 session riêng. Paste prompt, không cần đọc lại spec.**
 
+### MQL5 Convention Notes (áp dụng cho TẤT CẢ prompts)
+
+1. **KHÔNG dùng `extern`** — MQL5 chỉ có `input`/`sinput`. Tất cả `input` khai báo trong `RP_Main.mq5`. Các `.mqh` modules đọc biến `g_` globals (được set bởi Main trong `ApplyTFPreset()`).
+2. **KHÔNG dùng `TimeDayOfWeek()`** — Deprecated. Dùng: `MqlDateTime dt; TimeToStruct(time, dt); int dow = dt.day_of_week;`
+3. **Opacity/Alpha** — MQL5 OBJ_RECTANGLE không hỗ trợ alpha channel. Dùng `ColorToARGB(color, alpha_0_255)` với `OBJPROP_COLOR` cho text/label. Cho rectangle zones, dùng color blending thủ công: `BlendColor(fg, bg, alpha_pct)` = mix RGB channels. Hoặc chấp nhận dùng `OBJPROP_FILL` on/off + màu nhạt thay opacity.
+4. **Include guard** — Mỗi `.mqh` dùng `#ifndef` / `#define` / `#endif`. Globals chỉ khai báo 1 lần trong `RP_Utils.mqh`, các module khác include `RP_Utils.mqh` qua guard nên không bị duplicate.
+5. **Thêm `#property strict`** vào `RP_Main.mq5`.
+
 ### Dependency Graph
 
 ```
 Phase 1: P1 → P2                    (Foundation)
 Phase 2: P3, P4, P5, P6, P7         (Independent — có thể song song)
-Phase 3: P8 → P17 → P9              (Core Logic + Market Structure)
-Phase 4: P10, P11, P12              (Advanced — cần Phase 2+3)
-Phase 5: P13, P14, P15              (UI — cần Phase 4)
-Phase 6: P16                        (Main — tổng hợp tất cả)
+Phase 3: P8 → P9A → P10             (Core Logic + Market Structure)
+Phase 4: P11, P12, P13              (Advanced — cần Phase 2+3)
+Phase 5: P14, P15, P16              (UI — cần Phase 4)
+Phase 6: P17                        (Main — tổng hợp tất cả)
 ```
 
 ---
@@ -79,11 +87,13 @@ struct SReactionPoint {
    bool             has_liquidity_sweep; // true nếu RP hình thành sau liquidity sweep
 };
 
+#define MAX_ZONE_RPS 8  // Max RP per confluence zone (tránh dynamic array)
+
 struct SConfluenceZone {
    int              id;
    double           zone_high, zone_low, center_price;
    int              rp_count;
-   int              rp_ids[];            // DYNAMIC array — không giới hạn cứng
+   int              rp_ids[MAX_ZONE_RPS]; // FIXED array — tránh ArrayResize runtime
    ENUM_RP_TYPE     zone_type;           // Majority vote (đếm SUPPORT vs RESISTANCE)
    double           multiplier, bonus, final_score;
    string           tf_description;      // "H1+H4+D1"
@@ -188,6 +198,76 @@ ENUM_TIMEFRAMES g_htf_1, g_htf_2;
 double g_reaction_atr_multiplier;
 bool   g_use_adaptive_reaction;
 
+=== ANTI-REPAINTING MACRO ===
+
+#define RP_SHIFT_MIN 1
+// Macro bảo vệ: dùng thay iClose/iHigh/iLow trực tiếp
+// Nếu shift < 1 → Print warning + return 0 (debug mode)
+double RP_Close(int shift) { if(shift < RP_SHIFT_MIN) { Print("WARNING: bar[0] access blocked"); return 0; } return iClose(_Symbol, PERIOD_CURRENT, shift); }
+double RP_High(int shift)  { if(shift < RP_SHIFT_MIN) { Print("WARNING: bar[0] access blocked"); return 0; } return iHigh(_Symbol, PERIOD_CURRENT, shift); }
+double RP_Low(int shift)   { if(shift < RP_SHIFT_MIN) { Print("WARNING: bar[0] access blocked"); return 0; } return iLow(_Symbol, PERIOD_CURRENT, shift); }
+// TẤT CẢ modules phải dùng RP_Close/RP_High/RP_Low thay vì gọi iClose/iHigh/iLow trực tiếp.
+
+=== CACHED VALUES (update 1 lần/bar trong OnCalculate, trước khi gọi modules) ===
+
+// Tránh CopyBuffer 200+ lần/bar. Tính 1 lần, cache cho toàn bộ bar.
+double g_cached_atr14 = 0;          // ATR(14) bar[1], update mỗi bar
+double g_cached_atr14_ma50 = 0;     // SMA(ATR14, 50), update mỗi bar
+double g_cached_volume_ma20 = 0;    // SMA(tick_volume, 20), update mỗi bar
+int    g_cached_bar_index = -1;     // Bar index lần cuối cache, detect stale
+
+// Fibo cache — tính 1 lần/bar
+double g_cached_fibo_high = 0;      // Swing High trong fibo_lookback
+double g_cached_fibo_low = 0;       // Swing Low trong fibo_lookback
+double g_cached_fibo_618 = 0;       // 61.8% level
+double g_cached_fibo_500 = 0;       // 50.0% level
+double g_cached_fibo_382 = 0;       // 38.2% level
+
+// Dirty flags cho scoring optimization
+bool   g_rp_dirty[];                // ArrayResize(MAX_RP_COUNT) trong OnInit
+int    g_last_calc_bar[];           // Bar index lần cuối recalc per RP
+
+// HTF cache — chỉ update khi có bar mới trên HTF
+bool   g_htf1_cache_valid = false;
+bool   g_htf2_cache_valid = false;
+int    g_htf1_cached_swing_count = 0;
+int    g_htf2_cached_swing_count = 0;
+
+// Confluence update flag — set bởi HandlePartialBreakout()
+bool   g_confluence_needs_update = false;
+
+// Alert throttle
+double g_last_alert_check_price = 0; // Cache giá lần cuối check alert
+
+void UpdateBarCache():
+  // GỌI ĐẦU TIÊN trong OnCalculate khi IsNewBar()
+  int current_bar = Bars(_Symbol, PERIOD_CURRENT);
+  if(current_bar == g_cached_bar_index) return; // Đã cache bar này
+  g_cached_bar_index = current_bar;
+
+  // ATR14
+  g_cached_atr14 = CalcATR(14, 1);  // 1 CopyBuffer call thay vì 200+
+  if(g_cached_atr14 <= 0 || g_cached_atr14 != g_cached_atr14) g_cached_atr14 = PipsToPrice(10);
+
+  // ATR MA50 — rolling buffer
+  static double atr_buffer[50]; static int atr_idx = 0; static int atr_fill = 0;
+  atr_buffer[atr_idx % 50] = g_cached_atr14; atr_idx++; atr_fill = MathMin(atr_fill+1, 50);
+  double sum = 0; for(int i=0; i<atr_fill; i++) sum += atr_buffer[i];
+  g_cached_atr14_ma50 = sum / atr_fill;
+
+  // Volume MA20 — rolling buffer
+  static double vol_buffer[20]; static int vol_idx = 0; static int vol_fill = 0;
+  // MQL5: iVolume() tồn tại nhưng chậm hơn array parameter từ OnCalculate
+  // Nếu có tick_volume[] từ OnCalculate → dùng tick_volume[1]
+  // Fallback: iVolume(_Symbol, PERIOD_CURRENT, 1)
+  vol_buffer[vol_idx % 20] = (double)iVolume(_Symbol, PERIOD_CURRENT, 1);
+  vol_idx++; vol_fill = MathMin(vol_fill+1, 20);
+  sum = 0; for(int i=0; i<vol_fill; i++) sum += vol_buffer[i];
+  g_cached_volume_ma20 = sum / vol_fill;
+
+  // Fibo levels
+  UpdateFiboCache();
+
 === UTILITY FUNCTIONS ===
 
 1. PipValue(): double
@@ -196,23 +276,37 @@ bool   g_use_adaptive_reaction;
    - JPY pairs: Point()*100 (hoặc detect từ Digits())
    - Digits()==3 hoặc 5 → PipValue = Point()*10
    - Digits()==2 hoặc 4 → PipValue = Point()
+   - GUARD: if(pip_val <= 0) pip_val = Point() > 0 ? Point() : 0.0001;
+   - KHÔNG BAO GIỜ return 0
 
 2. PipsToPrice(int pips): double
    - return pips * PipValue()
 
 3. PriceToPips(double price_diff): double
-   - return price_diff / PipValue()
+   - double pv = PipValue();
+   - if(pv <= 0) return 0;  // Guard division by zero
+   - return price_diff / pv
 
 4. SafeATR(int period, int shift=0): double
-   - double atr = CalcATR(period, shift)
+   - NẾU period==14 && shift<=1 → return g_cached_atr14 (dùng cache, KHÔNG gọi CopyBuffer)
+   - Else: double atr = CalcATR(period, shift)
    - return (atr > 0 && atr == atr) ? atr : PipsToPrice(10)
    - Guard NaN và zero
 
 5. GetATR14(int shift=0): double
-   - Wrapper: return SafeATR(14, shift)
+   - if(shift <= 1) return g_cached_atr14;  // Fast path — cache hit
+   - Else: return SafeATR(14, shift)
 
 6. CalcATR(int period, int shift): double
+   - if(g_handle_atr == INVALID_HANDLE) return 0;  // Guard null handle
    - Dùng g_handle_atr, CopyBuffer
+   - Guard CopyBuffer return value: if(copied <= 0) return 0;
+
+6b. UpdateFiboCache(): void
+   - Tìm Swing High/Low trong g_fibo_lookback_bars (1 lần/bar)
+   - Tính 3 Fibo levels: 61.8%, 50%, 38.2%
+   - Lưu vào g_cached_fibo_high/low/618/500/382
+   - Modules khác đọc cache thay vì scan lại 100 bars
 
 7. IsNewBar(): bool
    - Static datetime last_time
@@ -241,13 +335,31 @@ bool   g_use_adaptive_reaction;
     - 40-59 → RP_LEVEL3
     - <40 → RP_HIDDEN
 
-14. InitIndicatorHandles():
-    - g_handle_adx = iADX(_Symbol, PERIOD_CURRENT, adx_period)
+14. InitIndicatorHandles(): bool
+    - g_handle_adx = iADX(_Symbol, PERIOD_CURRENT, g_adx_period)
     - g_handle_atr = iATR(_Symbol, PERIOD_CURRENT, 14)
-    - Check INVALID_HANDLE → Print error
+    - Check INVALID_HANDLE → Print error, return false
+    - return true nếu cả 2 handle valid
 
 15. ReleaseIndicatorHandles():
-    - IndicatorRelease cho tất cả handles
+    - if(g_handle_adx != INVALID_HANDLE) IndicatorRelease(g_handle_adx); g_handle_adx = INVALID_HANDLE;
+    - if(g_handle_atr != INVALID_HANDLE) IndicatorRelease(g_handle_atr); g_handle_atr = INVALID_HANDLE;
+
+15b. RevalidateHandles(): bool
+    - Gọi mỗi 100 bars (static counter)
+    - Nếu handle == INVALID_HANDLE → thử re-create
+    - Return false nếu không recover được → Print warning
+    - Dùng trong OnCalculate: if(!RevalidateHandles()) { /* skip modules cần ADX/ATR */ }
+
+16. BlendColor(color fg, color bg, int alpha_pct): color
+    - Simulate transparency cho OBJ_RECTANGLE (MQL5 không hỗ trợ native alpha)
+    - alpha_pct: 0=fully transparent (=bg), 100=fully opaque (=fg)
+    - int r = (ColorGetRed(fg)*alpha_pct + ColorGetRed(bg)*(100-alpha_pct)) / 100;
+    - Tương tự cho g, b
+    - return (color)((b<<16) | (g<<8) | r);
+
+17. GetChartBackground(): color
+    - return (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
 
 Lưu ý: File này KHÔNG chứa logic nghiệp vụ, chỉ globals + helpers.
 ```
@@ -267,16 +379,23 @@ Tạo file MQL5/Include/ReactionPoint/RP_RegimeFilter.mqh cho Reaction Point Ind
 Include guard: #ifndef RP_REGIMEFILTER_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs cần khai báo:
-  extern int    ADX_Period;
-  extern double ADX_Strong_Threshold;
-  extern double ADX_Weak_Threshold;
-  extern bool   Use_Regime_Filter;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input int    ADX_Period;
+  input double ADX_Strong_Threshold;
+  input double ADX_Weak_Threshold;
+  input bool   Use_Regime_Filter;
+  → Main copy vào g_ globals trong ApplyTFPreset(). Module này đọc globals.
 
 GLOBALS TỪ RP_Utils.mqh:
   - g_current_regime, g_current_trend, g_current_adx
   - g_handle_adx
   - SafeATR(), GetATR14()
+
+THÊM GLOBALS vào RP_Utils.mqh (để module đọc):
+  int    g_adx_period = 14;
+  double g_adx_strong_threshold = 25.0;
+  double g_adx_weak_threshold = 20.0;
+  bool   g_use_regime_filter = true;
 
 === LOGIC ===
 
@@ -284,9 +403,9 @@ GLOBALS TỪ RP_Utils.mqh:
    - Đọc ADX value từ g_handle_adx (CopyBuffer)
    - g_current_adx = adx_value
    - Phân loại:
-     ADX > ADX_Strong_Threshold (25) → REGIME_STRONG_TREND
-     ADX >= ADX_Weak_Threshold (20) AND <= Strong → REGIME_WEAK_TREND
-     ADX < ADX_Weak_Threshold:
+     ADX > g_adx_strong_threshold (25) → REGIME_STRONG_TREND
+     ADX >= g_adx_weak_threshold (20) AND <= Strong → REGIME_WEAK_TREND
+     ADX < g_adx_weak_threshold:
        ATR(14) < ATR_MA50 * 0.7 → REGIME_CHOPPY
        Else → REGIME_RANGING
    - ATR_MA50: trung bình ATR(14) của 50 bars gần nhất
@@ -298,7 +417,7 @@ GLOBALS TỪ RP_Utils.mqh:
    - Else → TREND_NONE
 
 2. GetRegimeScoreAdj(ENUM_RP_TYPE rp_type): double
-   - Nếu Use_Regime_Filter == false → return 0
+   - Nếu g_use_regime_filter == false → return 0
    - Mapping chiều:
      Uptrend + SUPPORT = cùng chiều
      Uptrend + RESISTANCE = ngược chiều
@@ -334,9 +453,14 @@ Tạo file MQL5/Include/ReactionPoint/RP_Session.mqh cho Reaction Point Indicato
 Include guard: #ifndef RP_SESSION_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern int  UTC_Offset;
-  extern bool Show_Session_Background;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input int  UTC_Offset;
+  input bool Show_Session_Background;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  int  g_utc_offset = 3;
+  bool g_show_session_background = true;
 
 GLOBALS: g_current_session, SessionToString()
 
@@ -357,7 +481,8 @@ GLOBALS: g_current_session, SessionToString()
 === FUNCTIONS ===
 
 1. UpdateCurrentSession():
-   - utc_hour = (TimeCurrent() - UTC_Offset * 3600) → extract hour + minute
+   - MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
+   - utc_hour = (dt.hour - g_utc_offset + 24) % 24; utc_min = dt.min;
    - Detect session theo bảng trên, ưu tiên từ cao xuống thấp
    - g_current_session = detected session
 
@@ -371,7 +496,7 @@ GLOBALS: g_current_session, SessionToString()
    | Dead Zone   | -20 |
 
 3. GetDayOfWeekAdj(): double
-   - int dow = TimeDayOfWeek(TimeCurrent())
+   - MqlDateTime dt; TimeToStruct(TimeCurrent(), dt); int dow = dt.day_of_week;
    - Monday (1): -5
    - Tue-Wed (2-3): 0
    - Thursday (4): +5
@@ -404,18 +529,22 @@ Tạo file MQL5/Include/ReactionPoint/RP_DynamicDecay.mqh cho Reaction Point Ind
 Include guard: #ifndef RP_DYNAMICDECAY_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern int  Decay_Interval_Bars;
-  extern int  Decay_Points_Per_Interval;
-  extern int  Max_RP_Age_Bars;
-  extern bool Use_Dynamic_Score;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input int  Decay_Interval_Bars;
+  input int  Decay_Points_Per_Interval;
+  input int  Max_RP_Age_Bars;
+  input bool Use_Dynamic_Score;
+  → Main copy vào g_ globals. Module này đọc globals.
 
-GLOBALS: g_rp_array[], g_rp_count, g_decay_interval_bars, g_decay_points_per_interval, g_max_rp_age_bars
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool g_use_dynamic_score = true;
+
+GLOBALS: g_rp_array[], g_rp_count, g_decay_interval_bars, g_decay_points_per_interval, g_max_rp_age_bars, g_use_dynamic_score
 
 === FUNCTIONS ===
 
 1. CalcDecayPenalty(int rp_index): double
-   - Nếu Use_Dynamic_Score == false → return 0
+   - Nếu g_use_dynamic_score == false → return 0
    - bars_since = current_bar - rp.bar_formed (hoặc dùng bar_last_tested nếu có test)
    - bars_since_last_event = bars kể từ lần cuối (formed hoặc tested)
    - penalty = (bars_since_last_event / g_decay_interval_bars) * g_decay_points_per_interval
@@ -451,39 +580,66 @@ Tạo file MQL5/Include/ReactionPoint/RP_NewsFilter.mqh cho Reaction Point Indic
 Include guard: #ifndef RP_NEWSFILTER_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern bool Use_News_Filter;
-  extern int  News_Blackout_Minutes;
-  extern bool News_Filter_High_Only;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool Use_News_Filter;
+  input int  News_Blackout_Minutes;
+  input bool News_Filter_High_Only;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool g_use_news_filter = true;
+  int  g_news_blackout_minutes = 30;
+  bool g_news_filter_high_only = false;
 
 GLOBALS: g_news_blackout, g_news_available, g_news_status_text, g_news_status_color
+
+=== PERFORMANCE NOTE ===
+- UpdateNewsFilter() KHÔNG gọi mỗi bar
+- Main OnCalculate throttle: gọi mỗi 5 phút (300 giây)
+- Kết quả cache trong globals, valid cho 5 phút
+- Nếu Calendar API fail → exponential backoff retry: 5min → 15min → 30min
 
 === LOGIC ===
 
 1. UpdateNewsFilter():
-   - Nếu Use_News_Filter == false → g_news_blackout = false; return
+   - Nếu g_use_news_filter == false → g_news_blackout = false; return
    - Dùng MQL5 Calendar API (MT5 build 2085+):
 
-   MqlCalendarValue values[];
-   int count = CalendarValueHistory(values,
-      TimeCurrent() - News_Blackout_Minutes*60,
-      TimeCurrent() + News_Blackout_Minutes*60);
+   Extract currencies từ _Symbol:
+     string base_currency = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_BASE);   // "GBP"
+     string quote_currency = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_PROFIT); // "USD"
 
-   - Lọc theo impact:
-     CALENDAR_IMPACT_HIGH → luôn blackout
-     CALENDAR_IMPACT_MEDIUM → blackout nếu News_Filter_High_Only == false
-     CALENDAR_IMPACT_LOW → bỏ qua
+   Scan cho mỗi currency riêng:
+     MqlCalendarValue values[];
+     datetime from_time = TimeCurrent() - g_news_blackout_minutes*60;
+     datetime to_time   = TimeCurrent() + g_news_blackout_minutes*60;
 
-   - Lọc theo currency: chỉ lấy news liên quan đến _Symbol
-     GBPUSD → GBP news + USD news
-     CADJPY → CAD news + JPY news
-     (Extract base/quote currency từ _Symbol)
+     // Lấy country code từ currency (helper function)
+     // Dùng CalendarValueHistory(values, from_time, to_time, country_code, currency)
+     // HOẶC dùng CalendarValueHistoryByEvent cho event cụ thể
+
+     Cách đơn giản hơn (recommended):
+       MqlCalendarEvent events[];
+       MqlCalendarValue values[];
+       int total = CalendarValueHistory(values, from_time, to_time);
+       // Sau đó filter: CalendarEventById(values[i].event_id, event)
+       // Check event.currency == base_currency || event.currency == quote_currency
+
+   - Lọc theo impact (từ MqlCalendarEvent.importance):
+     CALENDAR_IMPORTANCE_HIGH → luôn blackout
+     CALENDAR_IMPORTANCE_MODERATE → blackout nếu g_news_filter_high_only == false
+     CALENDAR_IMPORTANCE_LOW → bỏ qua
+
+   LƯU Ý: MQL5 Calendar dùng CALENDAR_IMPORTANCE_HIGH/MODERATE/LOW (không phải IMPACT)
 
    - Nếu có tin trong window:
      g_news_blackout = true
-     Tính thời gian còn lại/đã qua:
+     Tính thời gian còn lại/đã qua (dùng values[i].time - TimeCurrent()):
        Trước tin: g_news_status_text = "NFP in 12min", g_news_status_color = clrRed
        Sau tin: g_news_status_text = "CPI 8min ago", g_news_status_color = clrYellow
+     LƯU Ý: Calendar time đã là server time, cần convert nếu UTC_Offset khác server timezone.
+       Dùng TimeGMT() thay TimeCurrent() nếu muốn UTC-based, hoặc tính offset:
+       datetime adjusted = values[i].time + (TimeGMT() - TimeCurrent());
    - Nếu không có tin:
      g_news_blackout = false
      g_news_status_text = "clear"
@@ -508,6 +664,14 @@ GLOBALS: g_news_blackout, g_news_available, g_news_status_text, g_news_status_co
    - g_news_available = false
    - Dashboard: "NEWS: unavailable"
    - Bỏ qua filter hoàn toàn
+   - Exponential backoff retry:
+     static int fail_count = 0;
+     static datetime next_retry = 0;
+     if(TimeCurrent() < next_retry) return;  // Chưa đến lúc retry
+     fail_count++;
+     int wait_seconds = MathMin(300 * (int)MathPow(2, fail_count-1), 1800); // 5min → 10min → 20min → cap 30min
+     next_retry = TimeCurrent() + wait_seconds;
+     // Reset fail_count = 0 khi API success lại
 
 6. GetNewsTempScoreAdj(): double
    - Blackout (High) → return -15
@@ -525,10 +689,16 @@ Tạo file MQL5/Include/ReactionPoint/RP_SpreadFilter.mqh cho Reaction Point Ind
 Include guard: #ifndef RP_SPREADFILTER_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern bool   Use_Spread_Filter;
-  extern double Spread_Alert_Multiplier;
-  extern double Spread_Block_Multiplier;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool   Use_Spread_Filter;
+  input double Spread_Alert_Multiplier;
+  input double Spread_Block_Multiplier;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool   g_use_spread_filter = true;
+  double g_spread_alert_multiplier = 2.0;
+  double g_spread_block_multiplier = 3.0;
 
 GLOBALS: g_spread_blocked, g_spread_warning, g_current_spread_pips, g_average_spread_pips
          PipValue()
@@ -547,14 +717,14 @@ GLOBALS: g_spread_blocked, g_spread_warning, g_current_spread_pips, g_average_sp
    - return sum / spread_count
 
 3. UpdateSpreadFilter():
-   - Nếu Use_Spread_Filter == false → g_spread_blocked = false; g_spread_warning = false; return
+   - Nếu g_use_spread_filter == false → g_spread_blocked = false; g_spread_warning = false; return
    - g_current_spread_pips = GetCurrentSpreadPips()
    - Update rolling buffer → g_average_spread_pips = GetAverageSpread()
 
-   - if cur > avg * Spread_Block_Multiplier (3.0):
+   - if cur > avg * g_spread_block_multiplier (3.0):
        g_spread_blocked = true; g_spread_warning = false
        // Block entry, block alert cấp 2
-   - elif cur > avg * Spread_Alert_Multiplier (2.0):
+   - elif cur > avg * g_spread_alert_multiplier (2.0):
        g_spread_blocked = false; g_spread_warning = true
        // Score -10 tạm thời, entry vẫn hoạt động với warning
    - else:
@@ -567,7 +737,7 @@ Dashboard hiển thị: Normal=clrWhite, Warning=clrYellow, Blocked=clrRed
 ---
 ---
 
-## PHASE 3: CORE LOGIC + MARKET STRUCTURE
+## PHASE 3: CORE LOGIC + MARKET STRUCTURE (P8 → P9A → P10, tuần tự)
 
 ---
 
@@ -579,21 +749,15 @@ Tạo file MQL5/Include/ReactionPoint/RP_Detection.mqh cho Reaction Point Indica
 Include guard: #ifndef RP_DETECTION_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern int    Swing_Lookback;
-  extern int    Min_RP_Distance_Pips;
-  extern int    Min_Reaction_Move_Pips;
-  extern int    Initial_Bars_To_Scan;
-  extern bool   Use_Adaptive_Reaction;
-  extern double Reaction_ATR_Multiplier;
-  extern int    Breakout_Confirm_Pips;
-  extern int    Max_Retest_Bars;
-  extern int    Min_Candle_Size_Pips;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  Tất cả input values đã được Main copy vào g_ globals trong ApplyTFPreset().
+  Module này chỉ đọc globals.
 
 GLOBALS: g_rp_array[], g_rp_count, g_next_rp_id
          g_swing_lookback, g_min_rp_distance_pips, g_min_reaction_move_pips
          g_initial_bars_to_scan, g_breakout_confirm_pips, g_max_retest_bars
          g_min_candle_size_pips, g_use_adaptive_reaction, g_reaction_atr_multiplier
+         g_zone_width_pips, g_current_session
          PipsToPrice(), PriceToPips(), SafeATR()
 
 === 8.1 SWING DETECTION ===
@@ -620,16 +784,19 @@ GLOBALS: g_rp_array[], g_rp_count, g_next_rp_id
    - zone_low = price - PipsToPrice(g_zone_width_pips/2)
    - source_tf = Period()
    - session_formed = g_current_session
-   - day_of_week_formed = TimeDayOfWeek(iTime(_Symbol, PERIOD_CURRENT, bar_index))
+   - MqlDateTime dt; TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, bar_index), dt);
+     day_of_week_formed = dt.day_of_week
    - candle_pattern = pattern
    - initial_reaction_pips = reaction_pips
    - is_active = true, is_fresh = true, test_count = 0
    - confluence_id = -1
    - display_opacity = opacity theo level (PREMIUM=80, L1=70, L2=50, L3=35)
    - Array overflow: nếu g_rp_count >= MAX_RP_COUNT → evict:
-     1st: inactive RP
+     1st: inactive RP (scan → tìm first inactive)
      2nd: lowest score non-confluence RP
      3rd: oldest RP
+     BOUNDS GUARD: nếu không tìm được candidate (all active + confluence) → Print error, return
+     Eviction: overwrite slot → g_rp_dirty[evict_idx] = true
 
 === 8.2 CANDLE PATTERN ===
 
@@ -670,11 +837,11 @@ GLOBALS: g_rp_array[], g_rp_count, g_next_rp_id
 
 6. CheckBreakoutsAndRetests():
    - Loop tất cả active RP
-   - Dùng bar[1] close (closed bar, anti-repainting)
+   - Dùng RP_Close(1) (closed bar, anti-repainting enforced by macro)
 
    Breakout check:
-   - SUPPORT: close[1] < rp.zone_low - PipsToPrice(g_breakout_confirm_pips)
-   - RESISTANCE: close[1] > rp.zone_high + PipsToPrice(g_breakout_confirm_pips)
+   - SUPPORT: RP_Close(1) < rp.zone_low - PipsToPrice(g_breakout_confirm_pips)
+   - RESISTANCE: RP_Close(1) > rp.zone_high + PipsToPrice(g_breakout_confirm_pips)
    - Nếu breakout → bắt đầu tracking retest
 
    Gap qua RP (close vượt RP mà không touch zone):
@@ -693,13 +860,115 @@ GLOBALS: g_rp_array[], g_rp_count, g_next_rp_id
    Test count:
    - Mỗi lần giá chạm zone nhưng không breakout → test_count++
    - is_fresh = false sau lần test đầu tiên
+   - g_rp_dirty[rp_index] = true  // Trigger re-score khi breakout/test/role reversal
 
-Lưu ý quan trọng: Anti-repainting — tất cả logic chỉ dùng bar[1] trở về trước.
+Lưu ý quan trọng:
+- Anti-repainting: dùng RP_Close(1)/RP_High(1)/RP_Low(1) — macro chặn bar[0]
+- Dirty flag: mọi state change phải set g_rp_dirty[i] = true
 ```
 
 ---
 
-## PROMPT 9: RP_Scoring.mqh (Base Score + Final Score)
+## PROMPT 9A: RP_MarketStructure.mqh (Module H — BOS, CHoCH, Liquidity Sweep)
+
+```
+Tạo file MQL5/Include/ReactionPoint/RP_MarketStructure.mqh cho Reaction Point Indicator v3.0.
+
+Include guard: #ifndef RP_MARKETSTRUCTURE_MQH / #define / #endif
+Include: "RP_Utils.mqh"
+
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool Use_Market_Structure;
+  input int  Structure_Lookback_Bars;   // default 50
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool g_use_market_structure = true;
+  int  g_structure_lookback_bars = 50;
+
+GLOBALS TỪ RP_Utils.mqh:
+  - g_rp_array[], g_rp_count
+  - g_current_structure, g_choch_detected, g_last_bos_bar, g_last_choch_bar
+  - PipsToPrice(), PriceToPips()
+
+LƯU Ý: ENUM_STRUCTURE_STATE và has_liquidity_sweep field ĐÃ ĐƯỢC khai báo
+trong P1 (RP_Defines.mqh). KHÔNG cần thêm lại ở đây.
+
+=== CONCEPT (chỉ dùng price action, không thêm indicator) ===
+
+Break of Structure (BOS):
+  Bullish BOS = giá phá High trước đó (HH mới) → trend UP tiếp tục
+  Bearish BOS = giá phá Low trước đó (LL mới) → trend DOWN tiếp tục
+
+Change of Character (CHoCH):
+  Trong uptrend (HH+HL): giá phá HL gần nhất → CHoCH bearish
+  Trong downtrend (LL+LH): giá phá LH gần nhất → CHoCH bullish
+  = Tín hiệu ĐẦU TIÊN rằng trend có thể đảo chiều
+
+Liquidity Sweep:
+  Giá vượt qua swing high/low (quét stop loss) rồi ĐÓNG CỬA quay lại
+  = Trap signal, xác suất reversal rất cao
+
+=== FUNCTIONS ===
+
+1. UpdateMarketStructure():
+   - Gọi mỗi nến mới (IsNewBar)
+   - Scan closed bars [1..g_structure_lookback_bars]
+   - Xây dựng chuỗi swing points: HH, HL, LH, LL
+
+   Xác định structure:
+   a) Tìm 4 swing points gần nhất (2 high + 2 low)
+   b) Bullish: swing_high[0] > swing_high[1] AND swing_low[0] > swing_low[1]
+      → g_current_structure = STRUCTURE_BULLISH
+   c) Bearish: swing_high[0] < swing_high[1] AND swing_low[0] < swing_low[1]
+      → g_current_structure = STRUCTURE_BEARISH
+   d) Else → STRUCTURE_NONE
+
+   BOS detection (trên bar[1], anti-repainting):
+   - Bullish BOS: close[1] > last_swing_high → g_last_bos_bar = 1
+   - Bearish BOS: close[1] < last_swing_low → g_last_bos_bar = 1
+
+   CHoCH detection:
+   - Trong BULLISH: close[1] < last_higher_low → CHoCH bearish
+     g_choch_detected = true, g_last_choch_bar = 1
+   - Trong BEARISH: close[1] > last_lower_high → CHoCH bullish
+     g_choch_detected = true, g_last_choch_bar = 1
+   - Reset g_choch_detected = false sau 10 bars (hết hiệu lực)
+
+2. CheckLiquiditySweep(int bar_index): bool
+   - Điều kiện (tất cả phải true):
+     a) Bar[i] high > previous swing high (hoặc low < previous swing low)
+     b) Bar[i] ĐÓNG CỬA quay lại bên trong (close < swing high hoặc close > swing low)
+     c) Wick phía sweep >= 40% range bar (có rejection rõ)
+   - Nếu true → đánh dấu RP gần nhất: rp.has_liquidity_sweep = true
+   - Return true/false
+
+3. GetStructureScoreAdj(int rp_index): double
+   - Nếu g_use_market_structure == false → return 0
+
+   | Tình huống | Adj | Lý do |
+   |-----------|-----|-------|
+   | RP SUPPORT + STRUCTURE_BULLISH (cùng chiều BOS) | +15 | Buy tại support trong uptrend = high probability |
+   | RP RESISTANCE + STRUCTURE_BEARISH (cùng chiều BOS) | +15 | Sell tại resistance trong downtrend |
+   | RP ngược chiều BOS (chưa có CHoCH) | -20 | Counter-trend nguy hiểm |
+   | RP ngược chiều BOS + CHoCH vừa xảy ra (<10 bars) | +10 | Reversal play hợp lệ |
+   | STRUCTURE_NONE | 0 | Không đủ data |
+
+4. GetLiquiditySweepBonus(int rp_index): double
+   - rp.has_liquidity_sweep == true → return +20
+   - Else → return 0
+   - Đây là bonus mạnh nhất vì sweep + RP = institutional trap
+
+Lưu ý:
+- Tất cả logic chỉ dùng HIGH/LOW/CLOSE, không thêm indicator nào
+- Anti-repainting: chỉ dùng bar[1] trở về trước
+- CHoCH tự reset sau 10 bars để không ảnh hưởng dài hạn
+- Logic đơn giản: chỉ cần 4 swing points + 2 comparisons
+```
+
+---
+
+## PROMPT 10: RP_Scoring.mqh (Base Score + Final Score)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Scoring.mqh cho Reaction Point Indicator v3.0.
@@ -707,54 +976,78 @@ Tạo file MQL5/Include/ReactionPoint/RP_Scoring.mqh cho Reaction Point Indicato
 Include guard: #ifndef RP_SCORING_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern int Fibo_Lookback_Bars;
-  extern int Fibo_Tolerance_Pips;
+INPUTS: Không có. Dùng g_fibo_lookback_bars, g_fibo_tolerance_pips từ globals.
 
 GLOBALS: g_rp_array[], g_rp_count, SafeATR(), PriceToPips(), PipsToPrice()
          g_fibo_lookback_bars, g_fibo_tolerance_pips
-         ClassifyRPLevel()
+         ClassifyRPLevel(), SCORE_CAP
 
-FILE NÀY GỌI EXTERN FUNCTIONS TỪ CÁC MODULE KHÁC:
-  - GetRegimeScoreAdj(rp_type) — từ RP_RegimeFilter.mqh
-  - CalcDecayPenalty(rp_index) — từ RP_DynamicDecay.mqh
-  - CalcRecentBonus(rp_index) — từ RP_DynamicDecay.mqh
-  - GetSessionScoreAdj(session) — từ RP_Session.mqh
-  - GetDayOfWeekAdj() — từ RP_Session.mqh
-  - GetStructureScoreAdj(rp_index) — từ RP_MarketStructure.mqh
-  - GetLiquiditySweepBonus(rp_index) — từ RP_MarketStructure.mqh
+FILE NÀY GỌI FUNCTIONS TỪ CÁC MODULE KHÁC (đã include trước nó trong Main):
 
-=== 9.1 BASE SCORE (0-100) ===
+  Từ RP_RegimeFilter.mqh:
+    double GetRegimeScoreAdj(ENUM_RP_TYPE rp_type);
+      // Return [-30, +20]. Điều chỉnh score theo regime + direction alignment.
+
+  Từ RP_DynamicDecay.mqh:
+    double CalcDecayPenalty(int rp_index);
+      // Return [0, +35+]. Penalty tăng theo tuổi RP. Trừ vào score.
+    double CalcRecentBonus(int rp_index);
+      // Return [0, +15]. Bonus nếu RP vừa phản ứng gần đây.
+
+  Từ RP_Session.mqh:
+    double GetSessionScoreAdj(ENUM_SESSION session);
+      // Return [-20, +15]. Điều chỉnh theo session formed.
+    double GetDayOfWeekAdj();
+      // Return [-10, +5]. Điều chỉnh theo ngày trong tuần.
+
+  Từ RP_MarketStructure.mqh:
+    double GetStructureScoreAdj(int rp_index);
+      // Return [-20, +15]. Điều chỉnh theo BOS/CHoCH alignment.
+    double GetLiquiditySweepBonus(int rp_index);
+      // Return 0 hoặc +20. Bonus nếu RP có liquidity sweep.
+
+  LƯU Ý: MQL5 không cần forward declaration nếu include order đúng trong Main.
+  Thứ tự include trong Main phải đảm bảo các module trên được include TRƯỚC RP_Scoring.mqh.
+
+=== 10.1 BASE SCORE (0-100) ===
+
+PERFORMANCE NOTE: CalcBaseScore chỉ được gọi khi g_rp_dirty[rp_index] == true.
+Dùng cached values (g_cached_atr14, g_cached_fibo_*, g_cached_volume_ma20) thay vì tính lại.
 
 1. CalcBaseScore(int rp_index): double
    Tính tổng 6 thành phần:
 
    a) Reaction Strength (max 25):
-      score = min((rp.initial_reaction_pips / PriceToPips(SafeATR(14))) * 25, 25)
+      // Dùng g_cached_atr14 — KHÔNG gọi SafeATR() lại
+      double atr_pips = PriceToPips(g_cached_atr14);
+      if(atr_pips < 0.1) atr_pips = 10;  // Guard div by zero
+      score = MathMin((rp.initial_reaction_pips / atr_pips) * 25.0, 25.0)
 
    b) Test Count (max 20):
       1 test → 5
       2 tests → 12
       3 tests → 20
-      >3 tests → max(20 - (n-3)*5, 5)  // Diminishing returns, floor 5
+      >3 tests → MathMax(20 - (n-3)*5, 5)  // Diminishing returns, floor 5
 
    c) Candle Pattern (max 20):
+      // Pattern đã lưu trong rp.candle_pattern lúc detect — KHÔNG gọi DetectCandlePattern lại
       PINBAR=20, ENGULFING=15, OUTSIDE_BAR=12, LARGE_WICK=10, NONE=0
 
    d) Fibonacci Alignment (max 15):
-      - Tìm Swing High/Low trong g_fibo_lookback_bars
-      - Uptrend: retracement từ Low→High
-      - Downtrend: retracement từ High→Low
-      - Ranging: High→Low default
-      - Check RP price vs Fibo levels (tolerance: g_fibo_tolerance_pips):
-        61.8% → 15
-        50.0% → 10
-        38.2% → 7
+      // DÙG CACHE: g_cached_fibo_618, g_cached_fibo_500, g_cached_fibo_382
+      // KHÔNG scan lại g_fibo_lookback_bars mỗi RP
+      double tolerance = PipsToPrice(g_fibo_tolerance_pips);
+      if(MathAbs(rp.price - g_cached_fibo_618) <= tolerance) → 15
+      elif(MathAbs(rp.price - g_cached_fibo_500) <= tolerance) → 10
+      elif(MathAbs(rp.price - g_cached_fibo_382) <= tolerance) → 7
+      else → 0
 
    e) Volume (max 10):
-      tick_volume[swing_bar] vs MA20 tick_volume:
-      > MA20 * 1.5 → 10
-      > MA20 * 1.2 → 5
+      // DÙNG CACHE: g_cached_volume_ma20
+      // Chỉ cần 1 lookup iVolume tại swing_bar (đã lưu trong RP)
+      double vol = (double)iVolume(_Symbol, PERIOD_CURRENT, rp.bar_formed);
+      if(vol > g_cached_volume_ma20 * 1.5) → 10
+      elif(vol > g_cached_volume_ma20 * 1.2) → 5
       else → 0
 
    f) Round Number (max 10):
@@ -768,9 +1061,9 @@ FILE NÀY GỌI EXTERN FUNCTIONS TỪ CÁC MODULE KHÁC:
    - Ngược lại (buying < selling tại support) → -5
    - Tại RESISTANCE: ngược lại
 
-   return tổng (capped tại 100)
+   return MathMin(tổng, 100.0)  // Cap tại 100
 
-=== 9.2 FINAL SCORE ===
+=== 10.2 FINAL SCORE ===
 
 2. CalcFinalScore(int rp_index):
    - Tính base_score nếu chưa có
@@ -802,119 +1095,13 @@ Lưu ý: First Touch bonus: test_count == 0 AND is_fresh == true → +10, tag "F
 ```
 
 ---
-
-## PROMPT 17: RP_MarketStructure.mqh (Module H — BOS, CHoCH, Liquidity Sweep)
-
-```
-Tạo file MQL5/Include/ReactionPoint/RP_MarketStructure.mqh cho Reaction Point Indicator v3.0.
-
-Include guard: #ifndef RP_MARKETSTRUCTURE_MQH / #define / #endif
-Include: "RP_Utils.mqh"
-
-Extern inputs:
-  extern bool Use_Market_Structure;
-  extern int  Structure_Lookback_Bars;   // default 50, số bars scan HH/HL/LL/LH
-
-GLOBALS TỪ RP_Utils.mqh:
-  - g_rp_array[], g_rp_count
-  - PipsToPrice(), PriceToPips()
-
-THÊM GLOBALS MỚI:
-  ENUM_STRUCTURE_STATE g_current_structure = STRUCTURE_NONE;
-  bool                 g_choch_detected    = false;
-  int                  g_last_bos_bar      = 0;
-  int                  g_last_choch_bar    = 0;
-
-ENUM MỚI (thêm vào RP_Defines.mqh):
-  enum ENUM_STRUCTURE_STATE {
-     STRUCTURE_BULLISH,    // HH + HL liên tục
-     STRUCTURE_BEARISH,    // LL + LH liên tục
-     STRUCTURE_NONE        // Chưa xác định
-  };
-
-THÊM FIELDS vào SReactionPoint (RP_Defines.mqh):
-  bool has_liquidity_sweep;   // true nếu RP được hình thành sau sweep
-
-=== CONCEPT (chỉ dùng price action, không thêm indicator) ===
-
-Break of Structure (BOS):
-  Bullish BOS = giá phá High trước đó (HH mới) → trend UP tiếp tục
-  Bearish BOS = giá phá Low trước đó (LL mới) → trend DOWN tiếp tục
-
-Change of Character (CHoCH):
-  Trong uptrend (HH+HL): giá phá HL gần nhất → CHoCH bearish
-  Trong downtrend (LL+LH): giá phá LH gần nhất → CHoCH bullish
-  = Tín hiệu ĐẦU TIÊN rằng trend có thể đảo chiều
-
-Liquidity Sweep:
-  Giá vượt qua swing high/low (quét stop loss) rồi ĐÓNG CỬA quay lại
-  = Trap signal, xác suất reversal rất cao
-
-=== FUNCTIONS ===
-
-1. UpdateMarketStructure():
-   - Gọi mỗi nến mới (IsNewBar)
-   - Scan closed bars [1..Structure_Lookback_Bars]
-   - Xây dựng chuỗi swing points: HH, HL, LH, LL
-
-   Xác định structure:
-   a) Tìm 4 swing points gần nhất (2 high + 2 low)
-   b) Bullish: swing_high[0] > swing_high[1] AND swing_low[0] > swing_low[1]
-      → g_current_structure = STRUCTURE_BULLISH
-   c) Bearish: swing_high[0] < swing_high[1] AND swing_low[0] < swing_low[1]
-      → g_current_structure = STRUCTURE_BEARISH
-   d) Else → STRUCTURE_NONE
-
-   BOS detection (trên bar[1], anti-repainting):
-   - Bullish BOS: close[1] > last_swing_high → g_last_bos_bar = 1
-   - Bearish BOS: close[1] < last_swing_low → g_last_bos_bar = 1
-
-   CHoCH detection:
-   - Trong BULLISH: close[1] < last_higher_low → CHoCH bearish
-     g_choch_detected = true, g_last_choch_bar = 1
-   - Trong BEARISH: close[1] > last_lower_high → CHoCH bullish
-     g_choch_detected = true, g_last_choch_bar = 1
-   - Reset g_choch_detected = false sau 10 bars (hết hiệu lực)
-
-2. CheckLiquiditySweep(int bar_index): bool
-   - Điều kiện (tất cả phải true):
-     a) Bar[i] high > previous swing high (hoặc low < previous swing low)
-     b) Bar[i] ĐÓNG CỬA quay lại bên trong (close < swing high hoặc close > swing low)
-     c) Wick phía sweep >= 40% range bar (có rejection rõ)
-   - Nếu true → đánh dấu RP gần nhất: rp.has_liquidity_sweep = true
-   - Return true/false
-
-3. GetStructureScoreAdj(int rp_index): double
-   - Nếu Use_Market_Structure == false → return 0
-
-   | Tình huống | Adj | Lý do |
-   |-----------|-----|-------|
-   | RP SUPPORT + STRUCTURE_BULLISH (cùng chiều BOS) | +15 | Buy tại support trong uptrend = high probability |
-   | RP RESISTANCE + STRUCTURE_BEARISH (cùng chiều BOS) | +15 | Sell tại resistance trong downtrend |
-   | RP ngược chiều BOS (chưa có CHoCH) | -20 | Counter-trend nguy hiểm |
-   | RP ngược chiều BOS + CHoCH vừa xảy ra (<10 bars) | +10 | Reversal play hợp lệ |
-   | STRUCTURE_NONE | 0 | Không đủ data |
-
-4. GetLiquiditySweepBonus(int rp_index): double
-   - rp.has_liquidity_sweep == true → return +20
-   - Else → return 0
-   - Đây là bonus mạnh nhất vì sweep + RP = institutional trap
-
-Lưu ý:
-- Tất cả logic chỉ dùng HIGH/LOW/CLOSE, không thêm indicator nào
-- Anti-repainting: chỉ dùng bar[1] trở về trước
-- CHoCH tự reset sau 10 bars để không ảnh hưởng dài hạn
-- Logic đơn giản: chỉ cần 4 swing points + 2 comparisons
-```
-
----
 ---
 
-## PHASE 4: ADVANCED MODULES
+## PHASE 4: ADVANCED MODULES (P11, P12, P13 — cần Phase 2+3)
 
 ---
 
-## PROMPT 10: RP_Confluence.mqh (Module D — Multi-TF Confluence)
+## PROMPT 11: RP_Confluence.mqh (Module D — Multi-TF Confluence)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Confluence.mqh cho Reaction Point Indicator v3.0.
@@ -922,8 +1109,12 @@ Tạo file MQL5/Include/ReactionPoint/RP_Confluence.mqh cho Reaction Point Indic
 Include guard: #ifndef RP_CONFLUENCE_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern input:
-  extern bool Use_Confluence_Zones;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool Use_Confluence_Zones;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool g_use_confluence_zones = true;
 
 GLOBALS TỪ RP_Utils.mqh:
   - g_rp_array[], g_rp_count
@@ -934,22 +1125,45 @@ GLOBALS TỪ RP_Utils.mqh:
 
 STRUCTS (RP_Defines.mqh):
   SReactionPoint — fields: is_confluence, confluence_id, final_score, ...
-  SConfluenceZone — fields: rp_ids[] (DYNAMIC array), rp_count, multiplier, bonus, ...
+  SConfluenceZone — fields: rp_ids[MAX_ZONE_RPS] (FIXED array), rp_count, multiplier, bonus, ...
+    THAY ĐỔI: rp_ids[] FIXED size = 8. KHÔNG dùng dynamic array.
+    #define MAX_ZONE_RPS 8  // Max RP per confluence zone
 
 CONSTANTS: MAX_CONFLUENCE=50, MAX_HTF_RETRIES=3, SCORE_CAP=150.0
+
+=== PERFORMANCE NOTES ===
+- CollectHTFReactionPoints: CHỈ gọi khi IsNewBarHTF() = true (từ OnCalculate)
+- MergeClusterZones: Sort-based O(N log N) thay vì brute-force O(N²)
+- HTF data: dùng CopyHigh/CopyLow batch thay vì iHigh/iLow per-bar
 
 === LOGIC ===
 
 1. CollectHTFReactionPoints():
+   - CHỈ gọi khi g_htf1_cache_valid == false hoặc IsNewBarHTF() (từ Main)
    - Scan g_htf_1 và g_htf_2 cho swing points (giống DetectSwingPoints nhưng trên HTF)
-   - Dùng iHigh/iLow/iClose/iOpen với timeframe parameter
-   - Retry tối đa MAX_HTF_RETRIES nếu data chưa ready (Bars() < minimum)
+
+   HIỆU NĂNG — dùng batch copy thay vì iHigh/iLow per-bar:
+     double htf_high[], htf_low[], htf_close[];
+     CopyHigh(_Symbol, g_htf_1, 0, g_htf_bars_to_scan, htf_high);   // 1 call = N bars
+     CopyLow(_Symbol, g_htf_1, 0, g_htf_bars_to_scan, htf_low);     // 1 call = N bars
+     CopyClose(_Symbol, g_htf_1, 0, g_htf_bars_to_scan, htf_close); // 1 call = N bars
+     // Tổng: 6 CopyBuffer calls (2 TF × 3) thay vì 400+ iHigh/iLow calls
+
+   - Retry tối đa MAX_HTF_RETRIES nếu CopyHigh return <= 0
    - Fallback: chỉ dùng current TF nếu HTF data fail
+   - Kết quả cache trong static arrays; valid cho đến khi IsNewBarHTF() = true
 
 2. MergeClusterZones():
    - Reset confluence arrays (g_confluence_count = 0)
    - Gộp tất cả active RP (current TF + HTF)
-   - 2 RP cách nhau <= g_confluence_merge_pips → merge vào 1 zone
+
+   HIỆU NĂNG — sort-based clustering thay vì O(N²) pair comparison:
+     a) Sort RPs by price ascending (O(N log N))
+     b) Linear scan: nếu rp[i+1].price - rp[i].price <= PipsToPrice(g_confluence_merge_pips)
+        → add to current zone
+     c) Close zone khi gap > merge_pips → start new zone
+     // Tổng: O(N log N) thay vì O(N²)
+
    - Zone = range bao trùm tất cả RP trong group (min zone_low, max zone_high)
    - zone_type = majority vote (đếm RP_SUPPORT vs RP_RESISTANCE)
    - final_score = highest score trong group
@@ -965,31 +1179,51 @@ CONSTANTS: MAX_CONFLUENCE=50, MAX_HTF_RETRIES=3, SCORE_CAP=150.0
    Cập nhật mỗi RP trong group:
    - rp.is_confluence = true
    - rp.confluence_id = zone.id
+   - g_rp_dirty[rp_index] = true  // Trigger re-score
+
+   Bounds: zone.rp_count capped at MAX_ZONE_RPS (8). Nếu >8 RP → chỉ giữ 8 score cao nhất.
 
 3. ApplyConfluenceScoring():
    - Cho mỗi confluence zone, apply lên RP có highest score trong zone:
    - adjusted = rp.final_score * zone.multiplier + zone.bonus
-   - rp.final_score = MathMin(adjusted, SCORE_CAP)
+   - rp.final_score = MathMax(0, MathMin(adjusted, SCORE_CAP))  // Clamp cả 2 phía
    - Re-classify RP level: rp.rp_level = ClassifyRPLevel(rp.final_score)
 
 4. HandlePartialBreakout(int rp_id):
    - Khi 1 RP trong zone bị breakout → tách khỏi zone
+   - g_confluence_needs_update = true  // Trigger recalc trong Main OnCalculate
    - rp.is_confluence = false, rp.confluence_id = -1
-   - Giảm zone.rp_count, remove rp_id từ zone.rp_ids[]
+   - Giảm zone.rp_count
+
+   Remove rp_id từ zone.rp_ids[] — BOUNDS-SAFE:
+     bool found = false;
+     for(int j = 0; j < zone.rp_count; j++) {
+        if(zone.rp_ids[j] == rp_id) {
+           // Shift remaining left
+           for(int k = j; k < zone.rp_count - 1; k++)
+              zone.rp_ids[k] = zone.rp_ids[k+1];
+           zone.rp_count--;
+           found = true;
+           break;
+        }
+     }
+     if(!found) Print("WARNING: rp_id ", rp_id, " not found in zone");
+
    - Recalc multiplier/bonus:
      3→2: multiplier 1.5→1.3, bonus 25→10
      2→1: giải tán zone hoàn toàn
        - RP còn lại: is_confluence = false, confluence_id = -1
        - Remove zone từ g_confluence_array
+   - g_rp_dirty[affected_rp_indices] = true  // Trigger re-score
 
 Lưu ý:
-- Confluence zone phải cập nhật khi RP mới được detect
-- rp_ids[] là DYNAMIC array, dùng ArrayResize khi thêm/xóa
+- rp_ids[] là FIXED array[8], KHÔNG dùng ArrayResize runtime
+- Confluence chỉ update khi OnCalculate detect need_confluence_update == true
 ```
 
 ---
 
-## PROMPT 11: RP_EntrySetup.mqh (Module C — Entry Setup)
+## PROMPT 12: RP_EntrySetup.mqh (Module C — Entry Setup)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_EntrySetup.mqh cho Reaction Point Indicator v3.0.
@@ -997,15 +1231,21 @@ Tạo file MQL5/Include/ReactionPoint/RP_EntrySetup.mqh cho Reaction Point Indic
 Include guard: #ifndef RP_ENTRYSETUP_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern bool   Show_Entry_Setup;
-  extern double Min_RR_Ratio;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool   Show_Entry_Setup;
+  input double Min_RR_Ratio;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool   g_show_entry_setup = true;
+  double g_min_rr_ratio = 1.5;
 
 GLOBALS TỪ RP_Utils.mqh:
   - g_rp_array[], g_rp_count
   - g_setup_array[], g_setup_count
   - g_current_regime, g_news_blackout, g_spread_blocked
   - g_sl_buffer_pips, g_entry_buffer_pips, g_max_setup_age_bars, g_min_score_to_show
+  - g_min_rr_ratio
   - PipsToPrice(), PriceToPips(), GetATR14()
   - MAX_SETUPS=10
 
@@ -1030,20 +1270,23 @@ STRUCTS (RP_Defines.mqh):
 
 2. CreateEntrySetup(int rp_index):
    - BUY (RP_SUPPORT):
-     entry = iHigh(_Symbol, PERIOD_CURRENT, 1) + PipsToPrice(g_entry_buffer_pips)
-     sl = iLow(_Symbol, PERIOD_CURRENT, 1) - PipsToPrice(g_sl_buffer_pips)
+     entry = RP_High(1) + PipsToPrice(g_entry_buffer_pips)
+     sl = RP_Low(1) - PipsToPrice(g_sl_buffer_pips)
    - SELL (RP_RESISTANCE):
-     entry = iLow(_Symbol, PERIOD_CURRENT, 1) - PipsToPrice(g_entry_buffer_pips)
-     sl = iHigh(_Symbol, PERIOD_CURRENT, 1) + PipsToPrice(g_sl_buffer_pips)
+     entry = RP_Low(1) - PipsToPrice(g_entry_buffer_pips)
+     sl = RP_High(1) + PipsToPrice(g_sl_buffer_pips)
 
    - TP1 = FindNearestRPInDirection(entry, direction, 0)
-     Nếu TP1 == 0 hoặc R:R < Min_RR_Ratio → fallback: entry ± GetATR14()*2
+     Nếu TP1 == 0 hoặc R:R < g_min_rr_ratio → fallback: entry ± g_cached_atr14*2
    - TP2 = FindNearestRPInDirection(entry, direction, 1)
-     Nếu TP2 == 0 → fallback: entry ± GetATR14()*4
+     Nếu TP2 == 0 → fallback: entry ± g_cached_atr14*4
 
-   - sl_pips = PriceToPips(|entry - sl|)
-   - tp1_pips = PriceToPips(|tp1 - entry|)
-   - tp2_pips = PriceToPips(|tp2 - entry|)
+   - sl_pips = PriceToPips(MathAbs(entry - sl))
+   - tp1_pips = PriceToPips(MathAbs(tp1 - entry))
+   - tp2_pips = PriceToPips(MathAbs(tp2 - entry))
+
+   GUARD DIVISION BY ZERO:
+   - if(sl_pips < 0.1) sl_pips = 0.1;  // Minimum 0.1 pip SL
    - rr_ratio1 = tp1_pips / sl_pips
    - rr_ratio2 = tp2_pips / sl_pips
 
@@ -1052,11 +1295,10 @@ STRUCTS (RP_Defines.mqh):
    - 2 setup ngược hướng → warning "Conflicting setups"
 
 3. UpdateSetups():
-   - Gọi mỗi tick
-   - Tự ẩn (is_active=false) khi:
-     a) Quá g_max_setup_age_bars bars kể từ bar_created
-     b) SL bị phá (giá close[1] vượt sl_price) → is_invalidated = true
-     c) Entry triggered (giá chạm entry_price) → is_triggered = true
+   - ĐÃ TÁCH: per-tick phần nhẹ (SL invalidation) vào UpdateSetupInvalidation() trong Main
+   - Phần nặng (age check, entry trigger) → gọi per-bar only:
+     a) Quá g_max_setup_age_bars bars kể từ bar_created → is_active = false
+     b) Entry triggered (RP_Close(1) chạm entry_price) → is_triggered = true
 
 4. FindNearestRPInDirection(double from_price, ENUM_RP_TYPE direction, int skip_count): double
    - Tìm RP active gần nhất theo hướng trade
@@ -1065,12 +1307,16 @@ STRUCTS (RP_Defines.mqh):
    - skip_count: 0=gần nhất, 1=thứ 2
    - Return price hoặc 0 nếu không tìm thấy
 
-Anti-repainting: chỉ dùng bar[1] đã đóng, KHÔNG BAO GIỜ bar[0]
+   HIỆU NĂNG: Nếu g_rp_count > 30, dùng sorted price cache:
+   - Maintain static g_rp_sorted_by_price[] (update mỗi bar khi RP thay đổi)
+   - Binary search thay vì linear: O(log N) thay vì O(N)
+
+Anti-repainting: dùng RP_Close(1), RP_High(1), RP_Low(1) — KHÔNG BAO GIỜ shift=0
 ```
 
 ---
 
-## PROMPT 12: RP_Stats.mqh (Performance Tracker)
+## PROMPT 13: RP_Stats.mqh (Performance Tracker)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Stats.mqh cho Reaction Point Indicator v3.0.
@@ -1148,11 +1394,11 @@ KHÔNG lưu file. Reset khi indicator reload. Chỉ track bars đã chạy.
 ---
 ---
 
-## PHASE 5: UI
+## PHASE 5: UI (P14, P15, P16 — cần Phase 4)
 
 ---
 
-## PROMPT 13: RP_Drawing.mqh (Zones, Labels, Session BG, Entry Panel)
+## PROMPT 14: RP_Drawing.mqh (Zones, Labels, Session BG, Entry Panel)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Drawing.mqh cho Reaction Point Indicator v3.0.
@@ -1161,11 +1407,19 @@ Include guard: #ifndef RP_DRAWING_MQH / #define / #endif
 Include: "RP_Defines.mqh"
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern color Color_Premium, Color_Level1, Color_Level2, Color_Level3;
-  extern color Color_Confluence, Color_RoleReversal;
-  extern color Color_EntryBuy, Color_EntrySell;
-  extern int   Label_Font_Size;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input color Color_Premium, Color_Level1, Color_Level2, Color_Level3;
+  input color Color_Confluence, Color_RoleReversal;
+  input color Color_EntryBuy, Color_EntrySell;
+  input int   Label_Font_Size;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  color g_color_premium = clrGold, g_color_level1 = clrCrimson;
+  color g_color_level2 = clrOrange, g_color_level3 = clrSkyBlue;
+  color g_color_confluence = clrMediumPurple, g_color_role_reversal = clrMagenta;
+  color g_color_entry_buy = clrLimeGreen, g_color_entry_sell = clrRed;
+  int   g_label_font_size = 8;
 
 GLOBALS: g_rp_array[], g_rp_count, g_confluence_array[], g_confluence_count
          g_setup_array[], g_setup_count, g_object_count
@@ -1173,13 +1427,27 @@ CONSTANTS: OBJECT_PREFIX="RP_", MAX_CHART_OBJECTS=250
 
 === COLOR SYSTEM (Spec Section 17.1) ===
 
-Opacity theo level:
+MQL5 OBJ_RECTANGLE không hỗ trợ alpha trực tiếp.
+Giải pháp: Dùng helper BlendColor() để mix foreground color với chart background.
+
+color BlendColor(color fg, color bg, int alpha_pct):
+  // alpha_pct: 0=transparent (bg), 100=opaque (fg)
+  int r = (ColorGetRed(fg)*alpha_pct + ColorGetRed(bg)*(100-alpha_pct)) / 100;
+  int g = (ColorGetGreen(fg)*alpha_pct + ColorGetGreen(bg)*(100-alpha_pct)) / 100;
+  int b = (ColorGetBlue(fg)*alpha_pct + ColorGetBlue(bg)*(100-alpha_pct)) / 100;
+  return (color)((b<<16) | (g<<8) | r);
+
+Lấy chart background: ChartGetInteger(0, CHART_COLOR_BACKGROUND)
+
+Alpha theo level (truyền vào BlendColor):
   PREMIUM=80%, L1=70%, L2=50%, L3=35%
   Confluence=50%, RoleRev=60%
   Entry BUY/SELL=25%
   SL=clrFireBrick 30%, TP1=clrKhaki 20%, TP2=clrDarkKhaki 20%
 
-Decay visual: opacity giảm tuyến tính theo tuổi, floor 30%
+Cho OBJ_LABEL text: dùng ColorToARGB(color, alpha_0_255) với OBJPROP_COLOR.
+
+Decay visual: alpha_pct giảm tuyến tính theo tuổi, floor 30%
 
 === FUNCTIONS ===
 
@@ -1197,11 +1465,12 @@ Decay visual: opacity giảm tuyến tính theo tuổi, floor 30%
 
 3. DrawConfluenceGlow(int conf_index):
    - Chỉ cho confluence có 3+ RP
-   - 3 rectangle chồng:
-     Outer: zone ± 2pip, opacity 14% (86% transparent)
-     Middle: zone ± 1pip, opacity 30% (70% transparent)
-     Core: zone gốc, opacity 50%
-   - Color: Color_Confluence
+   - 3 rectangle chồng, dùng BlendColor() để simulate glow:
+     color bg = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
+     Outer: zone ± 2pip, color = BlendColor(g_color_confluence, bg, 14)
+     Middle: zone ± 1pip, color = BlendColor(g_color_confluence, bg, 30)
+     Core: zone gốc, color = BlendColor(g_color_confluence, bg, 50)
+   - OBJPROP_FILL = true cho cả 3
    - Name prefix: OBJECT_PREFIX + "GLOW_"
 
 4. DrawRPLabel(int rp_index):
@@ -1239,19 +1508,28 @@ Decay visual: opacity giảm tuyến tính theo tuổi, floor 30%
    - TP2: clrDarkKhaki, STYLE_DOT
    - Entry: Color_EntryBuy/Sell, STYLE_SOLID
 
-7. DrawSessionBackgrounds(int visible_bars):
-   - Vẽ nền session trên chart (OBJ_RECTANGLE)
-   - Colors (8-10% opacity):
-     Asian = LightCyan
-     London = Lavender
-     NY = LemonChiffon
-     Overlap = MistyRose
-     Dead = Gainsboro
+7. CreateSessionObjects():
+   - GỌI 1 LẦN trong OnInit. Tạo OBJ_RECTANGLE cho mỗi session visible.
+   - KHÔNG tạo lại mỗi bar. Chỉ update time range.
+   - Colors — dùng BlendColor(session_color, bg, 10):
+     Asian = BlendColor(clrLightCyan, bg, 10)
+     London = BlendColor(clrLavender, bg, 10)
+     NY = BlendColor(clrLemonChiffon, bg, 10)
+     Overlap = BlendColor(clrMistyRose, bg, 10)
+     Dead = BlendColor(clrGainsboro, bg, 10)
    - Name prefix: OBJECT_PREFIX + "SESS_"
 
+7b. UpdateSessionVisibility():
+   - GỌI MỖI BAR (nhẹ — chỉ update OBJPROP_TIME properties)
+   - Di chuyển rectangle time range theo visible bars
+   - KHÔNG xóa/tạo mới objects
+
 8. RedrawChangedRP():
-   - Chỉ vẽ lại RP có score thay đổi so với lần draw trước
-   - Lưu previous_score per RP để so sánh
+   - Chỉ vẽ lại RP có STATE thay đổi so với lần draw trước
+   - Track per RP: previous_score, previous_type, previous_active, previous_confluence
+   - Redraw nếu BẤT KỲ field nào thay đổi (score, rp_type, is_active, is_confluence, is_role_reversed, display_opacity)
+   - Static array: double prev_scores[]; ENUM_RP_TYPE prev_types[]; bool prev_active[]; bool prev_conf[];
+   - So sánh current vs previous, chỉ gọi DrawRPZone + DrawRPLabel cho RP đã thay đổi
 
 9. DeleteRPObjects(int rp_id):
    - Xóa tất cả objects của 1 RP: zone + label + glow
@@ -1269,7 +1547,7 @@ Decay visual: opacity giảm tuyến tính theo tuổi, floor 30%
 
 ---
 
-## PROMPT 14: RP_Alerts.mqh (Alert System — 4 Levels)
+## PROMPT 15: RP_Alerts.mqh (Alert System — 4 Levels)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Alerts.mqh cho Reaction Point Indicator v3.0.
@@ -1277,11 +1555,15 @@ Tạo file MQL5/Include/ReactionPoint/RP_Alerts.mqh cho Reaction Point Indicator
 Include guard: #ifndef RP_ALERTS_MQH / #define / #endif
 Include: "RP_Utils.mqh"
 
-Extern input:
-  extern bool Alert_Only_Active_Sessions;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool Alert_Only_Active_Sessions;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool g_alert_only_active_sessions = true;
 
 GLOBALS: g_rp_array[], g_rp_count, g_current_session, g_news_blackout, g_spread_blocked
-         g_proximity_alert_pips, g_reset_alert_pips
+         g_proximity_alert_pips, g_reset_alert_pips, g_alert_only_active_sessions
 
 SReactionPoint fields dùng: alert_sent[4], alert_reset_time, price, zone_high, zone_low,
   rp_type, final_score, is_active, is_role_reversed, is_confluence, candle_pattern, rp_level
@@ -1299,29 +1581,43 @@ ENUM_SESSION: SESSION_DEAD, SESSION_ASIAN
 
 === FILTERS ===
 
-- Session: nếu Alert_Only_Active_Sessions && session==DEAD → skip
+- Session: nếu g_alert_only_active_sessions && session==DEAD → skip
 - News blackout → KHÔNG trigger cấp 1-2
 - Spread blocked → KHÔNG trigger cấp 2
 - NGOẠI LỆ: Premium Confluence (score >=110) LUÔN alert kể cả Choppy/News
 
 === FUNCTIONS ===
 
+PERFORMANCE NOTE:
+  - CheckAllAlerts() CHỈ gọi khi giá di chuyển >= 2 pips (throttled bởi Main)
+  - Cấp 2-4 CHỈ check per-bar (dùng bar[1] closed)
+  - Cấp 1 (proximity) là duy nhất cần check per-"tick" (nhưng đã throttled)
+  - Early exit: skip RP nếu tất cả alert_sent[] == true
+
+=== FUNCTIONS ===
+
 1. CheckAllAlerts():
-   - Gọi mỗi tick trong OnCalculate
+   - Gọi từ OnCalculate KHI giá di chuyển >= 2 pips (Main throttle)
    - Loop tất cả active RP
+
+   EARLY EXIT per RP:
+     if(rp.alert_sent[0] && rp.alert_sent[1] && rp.alert_sent[2] && rp.alert_sent[3])
+        continue;  // Tất cả alerts đã gửi, skip
+
    - Cho mỗi RP, check 4 cấp alert theo thứ tự ưu tiên (4→3→2→1)
    - Apply filters ở trên
 
 2. CheckProximityAlert(int rp_index): bool
-   - distance = |SymbolInfoDouble(_Symbol, SYMBOL_BID) - rp.price|
+   - distance = MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - rp.price)
    - Nếu PriceToPips(distance) <= g_proximity_alert_pips:
-     Check hướng: so sánh close[1] vs close[2] → đang tiến về RP?
+     Check hướng: so sánh RP_Close(1) vs RP_Close(2) → đang tiến về RP?
      SUPPORT: price đang giảm về RP (close[1] < close[2])
      RESISTANCE: price đang tăng về RP (close[1] > close[2])
    - Return true nếu cần alert VÀ alert_sent[0] == false
 
 3. CheckReactionAlert(int rp_index): bool
-   - Bar[1] đã đóng, close nằm trong zone, có pattern hợp lệ
+   - Bar[1] đã đóng (RP_Close(1)), close nằm trong zone, có pattern hợp lệ
+   - Dùng rp.candle_pattern đã cache — KHÔNG gọi DetectCandlePattern lại
    - VÀ alert_sent[1] == false
 
 4. CheckRoleReversalAlert(int rp_index): bool
@@ -1336,17 +1632,22 @@ ENUM_SESSION: SESSION_DEAD, SESSION_ASIAN
    - Print("RP_ALERT[" + IntegerToString(level) + "]: " + message)
    - Set alert_sent[level-1] = true cho RP tương ứng
 
+   HIỆU NĂNG: Pre-build message string chỉ khi alert thực sự fire.
+   KHÔNG concatenate string trong check phase — chỉ trong send phase.
+
 7. ResetAlertIfDistant(int rp_index):
-   - Khi PriceToPips(|giá - rp.price|) >= g_reset_alert_pips:
+   - CHỈ gọi bên trong CheckAllAlerts() per-RP — KHÔNG loop riêng
+   - Khi PriceToPips(distance) >= g_reset_alert_pips:
      Reset alert_sent[0..3] = false
    - Cho phép alert lại khi giá quay lại
 
 Anti-spam: alert_sent[4] per RP. Mỗi zone chỉ 1 alert mỗi lần tiếp cận.
+Alert throttle: Main chỉ gọi CheckAllAlerts khi giá di chuyển >= 2 pips.
 ```
 
 ---
 
-## PROMPT 15: RP_Dashboard.mqh (Dashboard UI)
+## PROMPT 16: RP_Dashboard.mqh (Dashboard UI)
 
 ```
 Tạo file MQL5/Include/ReactionPoint/RP_Dashboard.mqh cho Reaction Point Indicator v3.0.
@@ -1355,12 +1656,20 @@ Include guard: #ifndef RP_DASHBOARD_MQH / #define / #endif
 Include: "RP_Defines.mqh"
 Include: "RP_Utils.mqh"
 
-Extern inputs:
-  extern bool             Show_Dashboard;
-  extern bool             Show_Performance_Stats;
-  extern ENUM_DASH_CORNER Dashboard_Corner;
-  extern int              Dashboard_Font_Size;
-  extern bool             Show_HTF_1, Show_HTF_2;
+INPUTS (khai báo trong RP_Main.mq5, KHÔNG khai báo ở đây):
+  input bool             Show_Dashboard;
+  input bool             Show_Performance_Stats;
+  input ENUM_DASH_CORNER Dashboard_Corner;
+  input int              Dashboard_Font_Size;
+  input bool             Show_HTF_1, Show_HTF_2;
+  → Main copy vào g_ globals. Module này đọc globals.
+
+THÊM GLOBALS vào RP_Utils.mqh:
+  bool             g_show_dashboard = true;
+  bool             g_show_performance_stats = true;
+  ENUM_DASH_CORNER g_dashboard_corner = DASH_TOP_LEFT;
+  int              g_dashboard_font_size = 9;
+  bool             g_show_htf_1 = true, g_show_htf_2 = true;
 
 GLOBALS DÙNG:
   - g_rp_array[], g_rp_count, g_confluence_count
@@ -1422,8 +1731,11 @@ LƯU Ý: Dòng status PHẢI có RevR (Role Reversal count) — đếm số RP c
 
 3. UpdateRadar():
    - Top 5 RP gần nhất (sort theo khoảng cách từ current price)
+   - BOUNDS: int radar_count = MathMin(5, g_rp_count);  // Guard < 5 RPs
    - Hiện: price, distance (pips), score
    - RES phía trên, SUP phía dưới
+   - HIỆU NĂNG: Dùng partial sort (selection of top-5), KHÔNG full sort 200 RPs
+     // Loop 5 lần, mỗi lần tìm nearest chưa selected → O(5N) = O(N) thay O(N log N)
 
 4. GetBiasString(): string
    - STRONG_TREND + UP → "BUY preferred"
@@ -1447,16 +1759,17 @@ Mỗi row = 1 OBJ_LABEL riêng, vị trí tính bằng xdistance/ydistance từ 
 ---
 ---
 
-## PHASE 6: INTEGRATION
+## PHASE 6: INTEGRATION (P17 — làm cuối cùng)
 
 ---
 
-## PROMPT 16: RP_Main.mq5 (Main Indicator File)
+## PROMPT 17: RP_Main.mq5 (Main Indicator File)
 
 ```
 Tạo file MQL5/Indicators/ReactionPoint/RP_Main.mq5 — main file cho Reaction Point Indicator v3.0.
 
 INDICATOR PROPERTIES:
+  #property strict
   #property indicator_chart_window
   #property indicator_buffers 0
   #property indicator_plots   0
@@ -1585,60 +1898,178 @@ input color  Color_EntrySell     = clrRed;
    - Áp tất cả giá trị từ TF Preset Table (bảng bên dưới)
 
 2. ValidateInputs():
-   - Clamp tất cả input về range hợp lệ, Print warning nếu cần
+   - Clamp tất cả input về range hợp lệ, Print warning nếu cần:
+     Swing_Lookback: MathMax(1, MathMin(Swing_Lookback, 10))
+     Min_RP_Distance_Pips: MathMax(5, MathMin(Min_RP_Distance_Pips, 100))
+     Min_Reaction_Move_Pips: MathMax(5, MathMin(Min_Reaction_Move_Pips, 100))
+     Initial_Bars_To_Scan: MathMax(50, MathMin(Initial_Bars_To_Scan, Bars(_Symbol, PERIOD_CURRENT)-10))
+     Breakout_Confirm_Pips: MathMax(1, MathMin(Breakout_Confirm_Pips, 50))
+     Structure_Lookback_Bars: MathMax(20, MathMin(Structure_Lookback_Bars, 100))
    - Validate HTF hierarchy: HTF_1 > Period(), HTF_2 > HTF_1
-   - Clamp Initial_Bars_To_Scan nếu > available bars
+     Nếu vi phạm → Print warning + set Show_HTF_1/2 = false
+   - Nếu bars < Swing_Lookback*2+5 → return INIT_FAILED + Print error
 
-3. ArrayResize:
-   ArrayResize(g_rp_array, MAX_RP_COUNT)
-   ArrayResize(g_confluence_array, MAX_CONFLUENCE)
-   ArrayResize(g_setup_array, MAX_SETUPS)
+3. ArrayResize (pre-allocate TẤT CẢ arrays 1 lần, KHÔNG resize runtime):
+   ArrayResize(g_rp_array, MAX_RP_COUNT);
+   ArrayResize(g_confluence_array, MAX_CONFLUENCE);
+   ArrayResize(g_setup_array, MAX_SETUPS);
+   ArrayResize(g_rp_dirty, MAX_RP_COUNT);       // Dirty flags
+   ArrayResize(g_last_calc_bar, MAX_RP_COUNT);   // Last calc bar per RP
+   ArrayInitialize(g_rp_dirty, true);            // Force first calc
+   ArrayInitialize(g_last_calc_bar, -1);
 
-4. InitIndicatorHandles()
+4. if(!InitIndicatorHandles()) return INIT_FAILED;
 5. InitStats()
-6. CreateDashboard()
-7. EventSetTimer(1)  // Flash management
-8. Return INIT_SUCCEEDED
+6. if(g_show_dashboard) CreateDashboard();
+7. if(g_show_session_background) CreateSessionObjects();  // Tạo 1 lần, update visibility sau
+8. EventSetTimer(1)  // Flash management
+9. Return INIT_SUCCEEDED
 
-=== OnCalculate() ===
+=== OnCalculate() — PERFORMANCE-OPTIMIZED ===
 
-// MỖI TICK:
-CheckAllAlerts();
-UpdateSetups();
+// ╔══════════════════════════════════════════════════════╗
+// ║  PHÂN TẦNG: per-tick (nhẹ) vs per-bar (nặng)       ║
+// ║  Target: <2ms per tick, <50ms per bar               ║
+// ╚══════════════════════════════════════════════════════╝
+
+// === PER-TICK (chỉ operations nhẹ, <1ms) ===
+
+// Spread: rolling buffer 100 tick, rất nhẹ
 UpdateSpreadFilter();
 
-// MỖI NẾN MỚI (IsNewBar()):
-UpdateNewsFilter();
-UpdateCurrentSession();
-UpdateMarketRegime();
-UpdateMarketStructure();
+// Alert: CHỈ check proximity khi giá di chuyển đủ xa (>2 pips từ lần check cuối)
+double current_bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+if(MathAbs(current_bid - g_last_alert_check_price) >= PipsToPrice(2)) {
+   CheckAllAlerts();    // 200 RP × distance calc, nhưng chỉ khi giá đi 2+ pips
+   g_last_alert_check_price = current_bid;
+}
 
-// Lần đầu scan full bars, sau đó chỉ scan ít bars gần nhất
+// Setup: CHỈ check invalidation (SL hit) per tick, KHÔNG tạo mới
+// Tạo mới chỉ khi IsNewBar()
+UpdateSetupInvalidation();  // Lightweight: loop 10 setups, check SL only
+
+// === PER-BAR (IsNewBar()) — TOÀN BỘ LOGIC NẶNG ===
+if(!IsNewBar()) return rates_total;
+
+// ── STEP 0: Cache & Revalidation ──
+UpdateBarCache();     // ATR14, Volume MA20, Fibo levels — 1 lần/bar
+RevalidateHandles();  // Mỗi 100 bars, check handle validity
+
+// ── STEP 1: Market Context (nhẹ, ~1ms) ──
+UpdateCurrentSession();   // Cache session, chỉ update nếu hour thay đổi
+UpdateMarketRegime();     // 1 CopyBuffer ADX + compare
+
+// ── STEP 2: News Filter (throttled, ~0ms most bars) ──
+// CHỈ gọi API mỗi 5 phút (khoảng 5-15 bars tùy TF), KHÔNG mỗi bar
+static datetime last_news_check = 0;
+if(TimeCurrent() - last_news_check >= 300) {  // 300 seconds = 5 minutes
+   UpdateNewsFilter();
+   last_news_check = TimeCurrent();
+}
+
+// ── STEP 3: Market Structure (moderate, ~2ms) ──
+if(g_use_market_structure)
+   UpdateMarketStructure();  // Scan 50 bars, find 4 swing points
+
+// ── STEP 4: RP Detection (heavy on first run, ~5-20ms) ──
 static bool first_run = true;
 int scan_bars = first_run ? g_initial_bars_to_scan : g_swing_lookback*2+5;
+int prev_rp_count = g_rp_count;
 DetectSwingPoints(scan_bars);
 first_run = false;
 
+// ── STEP 5: Breakout & Retest (~2ms) ──
 CheckBreakoutsAndRetests();
-for(int i = 0; i < g_rp_count; i++)
-   CalcFinalScore(i);
-UpdateAllDecay();
+// Breakout/retest sets g_rp_dirty[i] = true cho RP bị ảnh hưởng
 
-if(Use_Confluence_Zones) {
-   CollectHTFReactionPoints();
-   MergeClusterZones();
-   ApplyConfluenceScoring();
+// ── STEP 6: Scoring — CHỈ DIRTY RPs (~1-5ms thay vì 50ms) ──
+// Mark dirty: mới tạo, vừa test, role reversed, hoặc decay interval đến
+for(int i = prev_rp_count; i < g_rp_count; i++)
+   g_rp_dirty[i] = true;  // RP mới tạo
+
+for(int i = 0; i < g_rp_count; i++) {
+   if(!g_rp_array[i].is_active) continue;
+   // Decay check: dirty mỗi g_decay_interval_bars
+   int bars_since = Bars(_Symbol, PERIOD_CURRENT) - g_last_calc_bar[i];
+   if(bars_since >= g_decay_interval_bars) g_rp_dirty[i] = true;
+
+   if(!g_rp_dirty[i]) continue;  // SKIP — không thay đổi
+   CalcFinalScore(i);
+   g_rp_dirty[i] = false;
+   g_last_calc_bar[i] = Bars(_Symbol, PERIOD_CURRENT);
 }
-if(Show_Entry_Setup)
+UpdateAllDecay();  // Update opacity cho tất cả active RP
+
+// ── STEP 7: Confluence — CHỈ khi có RP mới hoặc breakout ──
+if(g_use_confluence_zones) {
+   // g_confluence_needs_update: set = true bởi HandlePartialBreakout() khi RP tách zone
+   bool need_confluence_update = (g_rp_count != prev_rp_count) || g_confluence_needs_update;
+   if(need_confluence_update) {
+      // HTF: CHỈ update khi có bar mới trên HTF
+      bool htf1_new = IsNewBarHTF(g_htf_1);
+      bool htf2_new = IsNewBarHTF(g_htf_2);
+      if(htf1_new || !g_htf1_cache_valid) {
+         CollectHTFReactionPoints();  // CopyHigh/CopyLow batch
+         g_htf1_cache_valid = true;
+      }
+      if(htf2_new || !g_htf2_cache_valid) {
+         CollectHTFReactionPoints();  // CHỈ cho HTF_2
+         g_htf2_cache_valid = true;
+      }
+      MergeClusterZones();
+      ApplyConfluenceScoring();
+      g_confluence_needs_update = false;  // Reset flag
+   }
+}
+
+// ── STEP 8: Entry Setup — tạo mới chỉ per-bar ──
+if(g_show_entry_setup)
    CheckEntryConditions();
 
-RedrawChangedRP();
-if(Show_Session_Background)
-   DrawSessionBackgrounds(visible_bars);
-UpdateDashboard();
+// ── STEP 9: UI — chỉ redraw thay đổi ──
+RedrawChangedRP();   // Chỉ RP có state thay đổi
+if(g_show_session_background)
+   UpdateSessionVisibility();  // Update visibility, KHÔNG tạo mới objects
+if(g_show_dashboard)
+   UpdateDashboard();
 EnforceObjectLimit();
 UpdateStats();
+
+// ── Broker disconnect detection ──
+static int last_bar_count = 0;
+int current_bars = Bars(_Symbol, PERIOD_CURRENT);
+if(last_bar_count > 0 && current_bars - last_bar_count > 5) {
+   Print("RP: Gap detected (", current_bars - last_bar_count, " bars). Rescanning...");
+   first_run = true;  // Force full rescan next bar
+   // Reset alert cooldowns
+   for(int i = 0; i < g_rp_count; i++)
+      ArrayInitialize(g_rp_array[i].alert_sent, false);
+}
+last_bar_count = current_bars;
+
 return rates_total;
+
+=== IsNewBarHTF(ENUM_TIMEFRAMES tf): bool ===
+// Detect bar mới trên Higher Timeframe
+static datetime htf_last_time[];  // Indexed by tf
+datetime htf_time = iTime(_Symbol, tf, 0);
+if(htf_time != htf_last_time[tf_index]) {
+   htf_last_time[tf_index] = htf_time;
+   return true;
+}
+return false;
+
+=== UpdateSetupInvalidation() ===
+// Lightweight per-tick: chỉ check SL/TP hit, KHÔNG tạo mới
+for(int i = 0; i < g_setup_count; i++) {
+   if(!g_setup_array[i].is_active) continue;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   // SL hit check
+   if(g_setup_array[i].direction == RP_SUPPORT && bid <= g_setup_array[i].sl_price)
+      g_setup_array[i].is_invalidated = true, g_setup_array[i].is_active = false;
+   if(g_setup_array[i].direction == RP_RESISTANCE && bid >= g_setup_array[i].sl_price)
+      g_setup_array[i].is_invalidated = true, g_setup_array[i].is_active = false;
+}
 
 === OnDeinit(reason) ===
 
@@ -1646,7 +2077,7 @@ return rates_total;
 - DeleteAllObjects()
 - DeleteDashboard()
 - ReleaseIndicatorHandles()
-- REASON_PARAMETERS → xóa objects, giữ RP data, recalculate
+- REASON_PARAMETERS → xóa objects, giữ RP data, set first_run=true (recalculate)
 - REASON_CHARTCHANGE / REASON_RECOMPILE / REASON_REMOVE → full reset
 
 === OnChartEvent(id, lparam, dparam, sparam) ===
@@ -1661,11 +2092,17 @@ return rates_total;
 
 === ERROR HANDLING (Spec Section 16) ===
 
-- Division by zero: dùng SafeATR() everywhere
-- HTF data: retry MAX_HTF_RETRIES lần, fallback current TF
+- Division by zero: PipValue() KHÔNG BAO GIỜ return 0, SafeATR() cached + fallback
+- RR ratio: if(sl_pips < 0.1) sl_pips = 0.1 trước khi chia
+- Score: MathMax(0, MathMin(adjusted, SCORE_CAP)) — clamp cả 2 phía
+- HTF data: retry MAX_HTF_RETRIES lần, fallback current TF, cache valid results
+- Handle invalid: RevalidateHandles() mỗi 100 bars, auto-recreate
 - Array overflow: evict RP → inactive first → lowest score non-confluence → oldest
-- Empty history: bars < Swing_Lookback*2+5 → warning, return
+  + Track evictable_count; Assert > 0 trước khi evict
+- Array bounds: radar_count = MathMin(5, g_rp_count); loop chỉ đến radar_count
+- Empty history: bars < Swing_Lookback*2+5 → warning, return (không crash)
 - Broker disconnect: gap > 5 bars → rescan all RP, reset alert cooldowns
+- Confluence rp_ids remove: bounds-check loop, guard khi rp_id không tìm thấy
 
 === TF PRESET TABLE ===
 
@@ -1715,23 +2152,36 @@ PHASE 2 — Independent Modules (song song, chỉ cần P1+P2):
   P6:  RP_NewsFilter.mqh    (Module F)
   P7:  RP_SpreadFilter.mqh  (Module G)
 
+  → SAU PHASE 2: Compile test P1-P7 cùng nhau (tạo dummy Main), fix errors.
+
 PHASE 3 — Core Logic + Market Structure (tuần tự):
   P8:  RP_Detection.mqh     ← cần P1+P2
-  P17: RP_MarketStructure.mqh (Module H — BOS/CHoCH/Sweep) ← cần P8
-  P9:  RP_Scoring.mqh       ← cần P3+P4+P5+P17 (gọi extern functions)
+  P9A: RP_MarketStructure.mqh (Module H — BOS/CHoCH/Sweep) ← cần P8
+  P10: RP_Scoring.mqh       ← cần P3+P4+P5+P9A (gọi functions từ các module đó)
+
+  → SAU PHASE 3: Compile test P1-P10 cùng nhau.
 
 PHASE 4 — Advanced Modules (cần Phase 2+3):
-  P10: RP_Confluence.mqh    (Module D)
-  P11: RP_EntrySetup.mqh    (Module C)
-  P12: RP_Stats.mqh
+  P11: RP_Confluence.mqh    (Module D)
+  P12: RP_EntrySetup.mqh    (Module C)
+  P13: RP_Stats.mqh
 
 PHASE 5 — UI (cần Phase 4):
-  P13: RP_Drawing.mqh
-  P14: RP_Alerts.mqh
-  P15: RP_Dashboard.mqh     ← cần P12+P13
+  P14: RP_Drawing.mqh
+  P15: RP_Alerts.mqh
+  P16: RP_Dashboard.mqh     ← cần P13+P14
+
+  → SAU PHASE 5: Compile test P1-P16 cùng nhau.
 
 PHASE 6 — Integration:
-  P16: RP_Main.mq5          ← LÀM CUỐI CÙNG, tổng hợp tất cả
+  P17: RP_Main.mq5          ← LÀM CUỐI CÙNG, tổng hợp tất cả
 ```
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.
+
+### Convention reminder (copy vào đầu mỗi prompt nếu cần)
+
+- MQL5: KHÔNG dùng `extern`, dùng `g_` globals (set bởi Main)
+- KHÔNG dùng `TimeDayOfWeek()`, dùng `MqlDateTime dt; TimeToStruct(time, dt); dt.day_of_week`
+- Opacity: dùng `BlendColor(fg, bg, alpha_pct)` helper, không có native alpha cho rectangles
+- Anti-repainting: chỉ dùng bar[1] trở về trước, KHÔNG BAO GIỜ bar[0]

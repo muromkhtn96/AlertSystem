@@ -8,158 +8,166 @@
 
 #include "RP_Utils.mqh"
 
-//--- Extern inputs
-extern bool Use_News_Filter;
-extern int  News_Blackout_Minutes;
-extern bool News_Filter_High_Only;
+// NO extern/input here — reads g_use_news_filter, g_news_blackout_minutes,
+// g_news_filter_high_only from globals
 
 //--- Medium impact tracking
 bool g_news_medium_nearby = false;
 
-//+------------------------------------------------------------------+
-//| Get currency country code for calendar                            |
-//+------------------------------------------------------------------+
-string GetCurrencyCountry(string currency)
-{
-   if(currency == "USD") return "US";
-   if(currency == "EUR") return "EU";
-   if(currency == "GBP") return "GB";
-   if(currency == "JPY") return "JP";
-   if(currency == "AUD") return "AU";
-   if(currency == "NZD") return "NZ";
-   if(currency == "CAD") return "CA";
-   if(currency == "CHF") return "CH";
-   return "";
-}
+//--- Throttle: only call Calendar API every 5 minutes (300s)
+datetime g_news_last_update = 0;
+
+//--- Exponential backoff for API failures
+int      g_news_fail_count  = 0;
+datetime g_news_next_retry  = 0;
 
 //+------------------------------------------------------------------+
 //| Update news filter status                                         |
+//| PERFORMANCE: throttled to run every 5 minutes, NOT every bar      |
+//| On API failure: exponential backoff 5min → 10min → 20min → 30min  |
 //+------------------------------------------------------------------+
 void UpdateNewsFilter()
 {
-   if(!Use_News_Filter)
+   if(!g_use_news_filter)
    {
-      g_news_blackout = false;
-      g_news_medium_nearby = false;
-      g_news_status_text = "OFF";
-      g_news_status_color = clrDarkGray;
+      g_news_blackout       = false;
+      g_news_medium_nearby  = false;
+      g_news_status_text    = "OFF";
+      g_news_status_color   = clrDarkGray;
       return;
    }
 
-   // Get base and quote currencies
+   //--- Throttle: skip if updated within 300 seconds
+   datetime now = TimeCurrent();
+   if(g_news_last_update > 0 && (now - g_news_last_update) < 300)
+      return;
+
+   //--- Backoff: skip if not yet time to retry after failure
+   if(g_news_next_retry > 0 && now < g_news_next_retry)
+      return;
+
+   //--- Get base and quote currencies from symbol
    string base_currency  = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_BASE);
    string quote_currency = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_PROFIT);
 
-   datetime from_time = TimeCurrent() - News_Blackout_Minutes * 60;
-   datetime to_time   = TimeCurrent() + News_Blackout_Minutes * 60;
+   datetime from_time = now - g_news_blackout_minutes * 60;
+   datetime to_time   = now + g_news_blackout_minutes * 60;
 
    MqlCalendarValue values[];
    int count = CalendarValueHistory(values, from_time, to_time);
 
    if(count < 0)
    {
-      // Calendar API failed
+      //--- Calendar API failed — exponential backoff
       g_news_available = false;
-      g_news_blackout = false;
-      g_news_status_text = "unavailable";
+      g_news_blackout  = false;
+      g_news_status_text  = "unavailable";
       g_news_status_color = clrWhite;
+
+      g_news_fail_count++;
+      int wait_seconds = MathMin(300 * (int)MathPow(2, g_news_fail_count - 1), 1800);
+      g_news_next_retry = now + wait_seconds;
       return;
    }
 
-   g_news_available = true;
-   g_news_blackout = false;
+   //--- API success — reset backoff
+   g_news_available   = true;
+   g_news_fail_count  = 0;
+   g_news_next_retry  = 0;
+   g_news_last_update = now;
+
+   g_news_blackout      = false;
    g_news_medium_nearby = false;
 
-   string closest_event = "";
-   int closest_minutes = 9999;
-   bool closest_is_upcoming = false;
-   bool found_high = false;
+   string closest_event     = "";
+   int    closest_minutes   = 9999;
+   bool   closest_is_upcoming = false;
 
    for(int i = 0; i < count; i++)
    {
-      // Get event details
+      //--- Get event details
       MqlCalendarEvent event;
       if(!CalendarEventById(values[i].event_id, event)) continue;
 
-      // Get country info
+      //--- Get country info to match currency
       MqlCalendarCountry country;
       if(!CalendarCountryById(event.country_id, country)) continue;
 
-      // Check if event matches our symbol's currencies
-      string country_currency = country.currency;
-      if(country_currency != base_currency && country_currency != quote_currency)
+      string event_currency = country.currency;
+      if(event_currency != base_currency && event_currency != quote_currency)
          continue;
 
-      // Check impact
-      ENUM_CALENDAR_EVENT_IMPACT impact = event.importance;
+      //--- Check importance (MQL5 uses CALENDAR_IMPORTANCE_*, not IMPACT)
+      ENUM_CALENDAR_EVENT_IMPORTANCE importance = event.importance;
 
-      if(impact == CALENDAR_IMPACT_LOW) continue;
+      if(importance == CALENDAR_IMPORTANCE_LOW)
+         continue;
 
-      if(News_Filter_High_Only && impact != CALENDAR_IMPACT_HIGH)
+      if(g_news_filter_high_only && importance != CALENDAR_IMPORTANCE_HIGH)
       {
-         // Track medium for dashboard display
-         if(impact == CALENDAR_IMPACT_MEDIUM)
+         // Track medium for dashboard display only
+         if(importance == CALENDAR_IMPORTANCE_MODERATE)
             g_news_medium_nearby = true;
          continue;
       }
 
-      // Calculate time difference
-      int diff_seconds = (int)(values[i].time - TimeCurrent());
+      //--- Calculate time difference
+      int diff_seconds = (int)(values[i].time - now);
       int diff_minutes = diff_seconds / 60;
+      int abs_minutes  = (int)MathAbs(diff_minutes);
 
-      // Check if this is the closest event
-      int abs_minutes = MathAbs(diff_minutes);
-      if(abs_minutes < MathAbs(closest_minutes))
+      //--- Track closest event for status text
+      if(abs_minutes < (int)MathAbs(closest_minutes))
       {
-         closest_minutes = diff_minutes;
-         closest_event = event.name;
+         closest_minutes     = diff_minutes;
+         closest_event       = event.name;
          closest_is_upcoming = (diff_seconds > 0);
-
-         if(impact == CALENDAR_IMPACT_HIGH)
-            found_high = true;
       }
 
-      // High impact → full blackout
-      if(impact == CALENDAR_IMPACT_HIGH)
+      //--- High impact → full blackout
+      if(importance == CALENDAR_IMPORTANCE_HIGH)
          g_news_blackout = true;
-      else if(impact == CALENDAR_IMPACT_MEDIUM)
+      else if(importance == CALENDAR_IMPORTANCE_MODERATE)
          g_news_medium_nearby = true;
    }
 
-   // Update status text
+   //--- Update status text for dashboard
    if(g_news_blackout && closest_event != "")
    {
       if(closest_is_upcoming)
       {
-         g_news_status_text = closest_event + " in " + IntegerToString(MathAbs(closest_minutes)) + "min";
+         g_news_status_text  = closest_event + " in " + IntegerToString((int)MathAbs(closest_minutes)) + "min";
          g_news_status_color = clrRed;
       }
       else
       {
-         g_news_status_text = closest_event + " " + IntegerToString(MathAbs(closest_minutes)) + "min ago";
+         g_news_status_text  = closest_event + " " + IntegerToString((int)MathAbs(closest_minutes)) + "min ago";
          g_news_status_color = clrYellow;
       }
    }
    else if(g_news_medium_nearby && closest_event != "")
    {
-      g_news_status_text = closest_event + " (Med)";
+      g_news_status_text  = closest_event + " (Med)";
       g_news_status_color = clrYellow;
    }
    else
    {
-      g_news_status_text = "clear";
+      g_news_status_text  = "clear";
       g_news_status_color = clrLime;
    }
 }
 
 //+------------------------------------------------------------------+
-//| Get news score adjustment                                         |
+//| Get news temporary score adjustment                               |
+//| Blackout (High)  → -15                                            |
+//| Warning (Medium) → -10                                            |
+//| Clear            →  0                                              |
 //+------------------------------------------------------------------+
-double GetNewsScoreAdjustment()
+double GetNewsTempScoreAdj()
 {
-   if(!Use_News_Filter) return 0.0;
-   if(g_news_blackout)        return -15.0;
-   if(g_news_medium_nearby)   return -10.0;
+   if(!g_use_news_filter) return 0.0;
+   if(g_news_blackout)      return -15.0;
+   if(g_news_medium_nearby) return -10.0;
    return 0.0;
 }
 
@@ -171,4 +179,4 @@ bool IsInNewsBlackout()
    return g_news_blackout;
 }
 
-#endif
+#endif // RP_NEWSFILTER_MQH

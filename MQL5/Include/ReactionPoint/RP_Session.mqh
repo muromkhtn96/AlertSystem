@@ -1,28 +1,41 @@
 //+------------------------------------------------------------------+
 //|                                                 RP_Session.mqh   |
 //|                        Reaction Point Indicator v3.0              |
-//|                        Module E — Session Detection               |
+//|                        Module E — Session & Day-of-Week           |
 //+------------------------------------------------------------------+
 #ifndef RP_SESSION_MQH
 #define RP_SESSION_MQH
 
 #include "RP_Utils.mqh"
 
-//--- Extern inputs
-extern int  UTC_Offset;
-extern bool Show_Session_Background;
+// NO extern/input here — reads g_utc_offset, g_show_session_background from globals
+
+//+------------------------------------------------------------------+
+//| Session definitions (UTC)                                         |
+//|   Asian         00:00 - 07:00                                     |
+//|   London Open   07:00 - 08:30                                     |
+//|   London        07:00 - 16:00                                     |
+//|   NY Open       13:00 - 14:30                                     |
+//|   NY            13:00 - 22:00                                     |
+//|   Overlap       13:00 - 16:00                                     |
+//|   Dead Zone     22:00 - 00:00                                     |
+//| Priority: Overlap > London Open > NY Open > London > NY > Asian  |
+//+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 //| Get session for a specific time                                   |
 //+------------------------------------------------------------------+
 ENUM_SESSION GetSessionForTime(datetime time)
 {
-   datetime utc_time = time - UTC_Offset * 3600;
    MqlDateTime dt;
-   TimeToStruct(utc_time, dt);
-   double hour_min = dt.hour + dt.min / 60.0;
+   TimeToStruct(time, dt);
 
-   // Priority: Overlap > London Open > NY Open > London > NY > Asian > Dead
+   // Convert server time to UTC
+   int utc_hour = (dt.hour - g_utc_offset + 24) % 24;
+   int utc_min  = dt.min;
+   double hour_min = utc_hour + utc_min / 60.0;
+
+   // Priority order: Overlap > London Open > NY Open > London > NY > Asian > Dead
    if(hour_min >= 13.0 && hour_min < 16.0)
       return SESSION_OVERLAP;
    if(hour_min >= 7.0 && hour_min < 8.5)
@@ -36,7 +49,7 @@ ENUM_SESSION GetSessionForTime(datetime time)
    if(hour_min >= 0.0 && hour_min < 7.0)
       return SESSION_ASIAN;
 
-   return SESSION_DEAD; // 22:00-00:00
+   return SESSION_DEAD; // 22:00 - 00:00
 }
 
 //+------------------------------------------------------------------+
@@ -50,15 +63,15 @@ void UpdateCurrentSession()
 //+------------------------------------------------------------------+
 //| Session score adjustment                                          |
 //+------------------------------------------------------------------+
-double GetSessionScoreAdjustment()
+double GetSessionScoreAdj(ENUM_SESSION session)
 {
-   switch(g_current_session)
+   switch(session)
    {
       case SESSION_OVERLAP:     return 15.0;
       case SESSION_LONDON_OPEN: return 10.0;
       case SESSION_NY_OPEN:     return 10.0;
-      case SESSION_LONDON:      return 5.0;
-      case SESSION_NY:          return 5.0;
+      case SESSION_LONDON:      return  5.0;
+      case SESSION_NY:          return  5.0;
       case SESSION_ASIAN:       return -10.0;
       case SESSION_DEAD:        return -20.0;
    }
@@ -68,76 +81,64 @@ double GetSessionScoreAdjustment()
 //+------------------------------------------------------------------+
 //| Day of week score adjustment                                      |
 //+------------------------------------------------------------------+
-double GetDayOfWeekAdjustment()
+double GetDayOfWeekAdj()
 {
-   datetime utc_time = TimeCurrent() - UTC_Offset * 3600;
    MqlDateTime dt;
-   TimeToStruct(utc_time, dt);
+   TimeToStruct(TimeCurrent(), dt);
+
+   // Convert to UTC hour for Friday check
+   int utc_hour = (dt.hour - g_utc_offset + 24) % 24;
 
    switch(dt.day_of_week)
    {
-      case 1: return -5.0;   // Monday
-      case 2: return 0.0;    // Tuesday
-      case 3: return 0.0;    // Wednesday
-      case 4: return 5.0;    // Thursday
-      case 5:                // Friday
-         return (dt.hour >= 15) ? -10.0 : 0.0;
+      case 1: return -5.0;    // Monday
+      case 2: return  0.0;    // Tuesday
+      case 3: return  0.0;    // Wednesday
+      case 4: return  5.0;    // Thursday
+      case 5:                 // Friday
+         return (utc_hour >= 15) ? -10.0 : 0.0;
    }
    return 0.0;
 }
 
 //+------------------------------------------------------------------+
-//| Session color for background                                      |
+//| Draw session background rectangles                                |
+//| Colors (8-10% opacity via BlendColor):                            |
+//|   Asian   = LightCyan                                             |
+//|   London  = Lavender                                              |
+//|   NY      = LemonChiffon                                          |
+//|   Overlap = MistyRose                                             |
+//|   Dead    = Gainsboro                                              |
+//| Name prefix: OBJECT_PREFIX + "SESS_"                              |
 //+------------------------------------------------------------------+
-color GetSessionBGColor(ENUM_SESSION sess)
+color GetSessionRawColor(ENUM_SESSION sess)
 {
    switch(sess)
    {
-      case SESSION_ASIAN:       return clrLavender;
-      case SESSION_LONDON_OPEN: return clrMistyRose;
-      case SESSION_LONDON:      return clrMistyRose;
-      case SESSION_NY_OPEN:     return clrLightCyan;
-      case SESSION_NY:          return clrLightCyan;
-      case SESSION_OVERLAP:     return clrLemonChiffon;
+      case SESSION_ASIAN:       return clrLightCyan;
+      case SESSION_LONDON_OPEN: return clrLavender;
+      case SESSION_LONDON:      return clrLavender;
+      case SESSION_NY_OPEN:     return clrLemonChiffon;
+      case SESSION_NY:          return clrLemonChiffon;
+      case SESSION_OVERLAP:     return clrMistyRose;
       case SESSION_DEAD:        return clrGainsboro;
    }
    return clrGainsboro;
 }
 
-//+------------------------------------------------------------------+
-//| Session icon for dashboard                                        |
-//+------------------------------------------------------------------+
-string GetSessionIcon(ENUM_SESSION sess)
+void DrawSessionBackgrounds(int visible_bars)
 {
-   switch(sess)
-   {
-      case SESSION_OVERLAP:     return "●";  // green
-      case SESSION_LONDON_OPEN: return "●";
-      case SESSION_NY_OPEN:     return "●";
-      case SESSION_LONDON:      return "●";
-      case SESSION_NY:          return "●";
-      case SESSION_ASIAN:       return "○";
-      case SESSION_DEAD:        return "○";
-   }
-   return "○";
-}
-
-//+------------------------------------------------------------------+
-//| Draw session background rectangles                                |
-//+------------------------------------------------------------------+
-void DrawSessionBackgrounds(int bars_visible)
-{
-   if(!Show_Session_Background) return;
+   if(!g_show_session_background) return;
 
    // Delete old session backgrounds
-   ObjectsDeleteAll(0, OBJECT_PREFIX + "SES_");
+   ObjectsDeleteAll(0, OBJECT_PREFIX + "SESS_");
 
-   // Draw backgrounds for visible bars
+   color bg = GetChartBackground();
    ENUM_SESSION prev_session = SESSION_DEAD;
    datetime sess_start = 0;
    int obj_idx = 0;
 
-   for(int i = bars_visible; i >= 0; i--)
+   for(int i = visible_bars; i >= 0; i--)
    {
       datetime bar_time = iTime(_Symbol, PERIOD_CURRENT, i);
       if(bar_time == 0) continue;
@@ -148,7 +149,7 @@ void DrawSessionBackgrounds(int bars_visible)
          // Close previous session block
          if(sess_start > 0 && prev_session != SESSION_DEAD)
          {
-            string name = OBJECT_PREFIX + "SES_" + IntegerToString(obj_idx++);
+            string name = OBJECT_PREFIX + "SESS_" + IntegerToString(obj_idx++);
             datetime end_time = iTime(_Symbol, PERIOD_CURRENT, (i == 0) ? 0 : i + 1);
 
             double chart_high = ChartGetDouble(0, CHART_PRICE_MAX);
@@ -156,8 +157,9 @@ void DrawSessionBackgrounds(int bars_visible)
 
             if(ObjectCreate(0, name, OBJ_RECTANGLE, 0, sess_start, chart_high, end_time, chart_low))
             {
-               color clr = GetSessionBGColor(prev_session);
-               ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+               color raw_clr = GetSessionRawColor(prev_session);
+               color blended = BlendColor(raw_clr, bg, 10); // ~10% opacity
+               ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
                ObjectSetInteger(0, name, OBJPROP_FILL, true);
                ObjectSetInteger(0, name, OBJPROP_BACK, true);
                ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
@@ -170,4 +172,4 @@ void DrawSessionBackgrounds(int bars_visible)
    }
 }
 
-#endif
+#endif // RP_SESSION_MQH
