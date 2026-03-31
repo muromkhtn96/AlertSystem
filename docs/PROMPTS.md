@@ -3340,6 +3340,11 @@ LƯU Ý:
 - FileWrite chỉ gọi khi có event (tạo/test/break) → không ảnh hưởng hiệu năng
 - Pending outcomes dùng fixed array [50] → memory footprint nhỏ
 - Anti-repainting: tất cả data đều từ bar[1] — consistent với indicator logic
+- APPEND MODE: data tích lũy qua sessions, không xóa khi restart
+- Header chỉ viết 1 lần khi file mới (FileIsExist check)
+- AUTO ROTATION: file > g_log_max_size_mb (10 MB) → xóa và tạo mới
+- InitLogger cleanup: nếu fail giữa chừng → DeinitLogger() đóng handles đã mở
+- Outcome lookup: dùng cached data trong SPendingOutcome, không loop RP array
 ```
 
 ---

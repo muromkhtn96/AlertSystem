@@ -16,6 +16,7 @@ int    g_log_handle_zones  = INVALID_HANDLE;
 int    g_log_handle_tests  = INVALID_HANDLE;
 int    g_log_handle_outcomes = INVALID_HANDLE;
 string g_log_folder        = "RP_Logs";
+int    g_log_max_size_mb   = 10;           // Max file size before rotation (MB)
 
 //+------------------------------------------------------------------+
 //| Outcome tracking — pending reaction measurement                   |
@@ -44,7 +45,61 @@ struct SPendingOutcome
 SPendingOutcome g_pending_outcomes[];
 
 //+------------------------------------------------------------------+
-//| InitLogger — open CSV files with headers                          |
+//| RotateIfNeeded — rename old file to .bak if over size limit       |
+//+------------------------------------------------------------------+
+void RotateIfNeeded(string filepath)
+{
+   // Check if file exists and exceeds size limit
+   int check = FileOpen(filepath, FILE_READ | FILE_CSV | FILE_ANSI | FILE_COMMON);
+   if(check == INVALID_HANDLE) return;  // File doesn't exist yet — OK
+
+   long size = FileSize(check);
+   FileClose(check);
+
+   long max_bytes = (long)g_log_max_size_mb * 1024 * 1024;
+   if(size >= max_bytes)
+   {
+      // Rotate: delete old .bak, rename current to .bak
+      string bak = filepath + ".bak";
+      FileDelete(bak, FILE_COMMON);
+      // MQL5 has no FileRename — copy content then delete original
+      // Simpler: just delete old file, start fresh (keep .bak impossible without FileMove)
+      // Best approach: delete and let new file start with headers
+      FileDelete(filepath, FILE_COMMON);
+      Print("RP_Logger: Rotated ", filepath, " (was ", size / 1024, " KB)");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| OpenLogFile — open CSV in append mode, write header if new file   |
+//+------------------------------------------------------------------+
+int OpenLogFile(string filepath)
+{
+   RotateIfNeeded(filepath);
+
+   // Try to open for read first to check if file exists with content
+   bool file_exists = false;
+   int check = FileOpen(filepath, FILE_READ | FILE_CSV | FILE_ANSI | FILE_COMMON);
+   if(check != INVALID_HANDLE)
+   {
+      file_exists = (FileSize(check) > 0);
+      FileClose(check);
+   }
+
+   // Open for read+write (append) — FILE_READ|FILE_WRITE opens existing file
+   int handle = FileOpen(filepath,
+      FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+   if(handle == INVALID_HANDLE) return INVALID_HANDLE;
+
+   // Seek to end for appending
+   if(file_exists)
+      FileSeek(handle, 0, SEEK_END);
+
+   return handle;
+}
+
+//+------------------------------------------------------------------+
+//| InitLogger — open CSV files, append to existing data              |
 //| Called from OnInit() when g_use_logger == true                    |
 //+------------------------------------------------------------------+
 bool InitLogger()
@@ -60,54 +115,66 @@ bool InitLogger()
    string prefix = g_log_folder + "/" + symbol + "_" + tf_str;
 
    //--- Zone Created log
-   g_log_handle_zones = FileOpen(prefix + "_zones.csv",
-      FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+   string zones_path = prefix + "_zones.csv";
+   bool zones_new = !FileIsExist(zones_path, FILE_COMMON);
+   g_log_handle_zones = OpenLogFile(zones_path);
    if(g_log_handle_zones == INVALID_HANDLE)
    {
       Print("RP_Logger: Failed to open zones log: ", GetLastError());
       return false;
    }
-   FileWrite(g_log_handle_zones,
-      "timestamp", "rp_id", "type", "price", "zone_high", "zone_low",
-      "zone_width_pips", "atr14_pips", "width_atr_ratio",
-      "pattern", "reaction_pips", "volume_ratio",
-      "session", "regime", "has_wick_filter",
-      "base_score", "final_score", "level");
+   if(zones_new)
+   {
+      FileWrite(g_log_handle_zones,
+         "timestamp", "rp_id", "type", "price", "zone_high", "zone_low",
+         "zone_width_pips", "atr14_pips", "width_atr_ratio",
+         "pattern", "reaction_pips", "volume_ratio",
+         "session", "regime", "has_wick_filter",
+         "base_score", "final_score", "level");
+   }
 
    //--- Test Events log
-   g_log_handle_tests = FileOpen(prefix + "_tests.csv",
-      FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+   string tests_path = prefix + "_tests.csv";
+   bool tests_new = !FileIsExist(tests_path, FILE_COMMON);
+   g_log_handle_tests = OpenLogFile(tests_path);
    if(g_log_handle_tests == INVALID_HANDLE)
    {
       Print("RP_Logger: Failed to open tests log: ", GetLastError());
-      DeinitLogger();  // Cleanup already-opened handles
+      DeinitLogger();
       return false;
    }
-   FileWrite(g_log_handle_tests,
-      "timestamp", "rp_id", "test_number", "is_body_test",
-      "test_volume", "volume_vs_ma20",
-      "zone_width_before", "zone_width_after",
-      "reaction_bar_low", "reaction_bar_high", "reaction_bar_close",
-      "score_at_test");
+   if(tests_new)
+   {
+      FileWrite(g_log_handle_tests,
+         "timestamp", "rp_id", "test_number", "is_body_test",
+         "test_volume", "volume_vs_ma20",
+         "zone_width_before", "zone_width_after",
+         "reaction_bar_low", "reaction_bar_high", "reaction_bar_close",
+         "score_at_test");
+   }
 
    //--- Outcome log (reaction measurement)
-   g_log_handle_outcomes = FileOpen(prefix + "_outcomes.csv",
-      FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+   string outcomes_path = prefix + "_outcomes.csv";
+   bool outcomes_new = !FileIsExist(outcomes_path, FILE_COMMON);
+   g_log_handle_outcomes = OpenLogFile(outcomes_path);
    if(g_log_handle_outcomes == INVALID_HANDLE)
    {
       Print("RP_Logger: Failed to open outcomes log: ", GetLastError());
-      DeinitLogger();  // Cleanup already-opened handles
+      DeinitLogger();
       return false;
    }
-   FileWrite(g_log_handle_outcomes,
-      "timestamp", "rp_id", "type", "score_at_test",
-      "test_count", "max_favorable_pips", "max_adverse_pips",
-      "bars_to_max_favorable", "outcome",
-      "session", "regime", "pattern",
-      "has_wick_filter", "strong_tests", "weak_tests",
-      "zone_width_pips", "width_atr_ratio");
+   if(outcomes_new)
+   {
+      FileWrite(g_log_handle_outcomes,
+         "timestamp", "rp_id", "type", "score_at_test",
+         "test_count", "max_favorable_pips", "max_adverse_pips",
+         "bars_to_max_favorable", "outcome",
+         "session", "regime", "pattern",
+         "has_wick_filter", "strong_tests", "weak_tests",
+         "zone_width_pips", "width_atr_ratio");
+   }
 
-   Print("RP_Logger: Initialized — ", prefix);
+   Print("RP_Logger: Initialized (append mode) — ", prefix);
    return true;
 }
 

@@ -78,6 +78,31 @@ Windows: C:\Users\{username}\AppData\Roaming\MetaQuotes\Terminal\Common\Files\RP
 
 Hoặc trong MT5: File → Open Data Folder → MQL5 → Files → RP_Logs
 
+### 2.6. Log tự quản lý như thế nào?
+
+| Hành vi | Chi tiết |
+|---|---|
+| **Append mode** | Data tích lũy qua nhiều sessions — không mất data khi restart indicator |
+| **Header tự động** | Chỉ viết header khi file mới, không viết lại header khi append |
+| **Auto rotation** | Khi file > 10 MB → xóa file cũ, tạo file mới (tránh file quá lớn) |
+| **Không tự xóa** | Log tồn tại vĩnh viễn cho đến khi bạn xóa thủ công hoặc file đạt 10 MB |
+
+**Xóa thủ công:** Vào thư mục RP_Logs, xóa các file `.csv` không cần nữa.
+
+**Thay đổi giới hạn size:** Sửa `g_log_max_size_mb` trong RP_Logger.mqh (mặc định 10 MB).
+
+**Ước tính dung lượng:**
+
+| Thời gian chạy | Số zones (H4) | File size ước tính |
+|---|---|---|
+| 1 tuần | ~50-100 | ~20-50 KB |
+| 1 tháng | ~200-400 | ~100-200 KB |
+| 6 tháng | ~1,000-2,000 | ~500 KB - 1 MB |
+| 2 năm+ | ~4,000+ | ~2-4 MB |
+
+→ Với giới hạn 10 MB, thực tế **không bao giờ cần rotation** trên H4.
+   Rotation chỉ cần thiết trên M5/M15 chạy lâu dài.
+
 ---
 
 ## 3. CẤU TRÚC FILE CSV
