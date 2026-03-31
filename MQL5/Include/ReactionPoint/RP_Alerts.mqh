@@ -17,8 +17,10 @@ void SendRPAlert(int level, int rp_index, string message)
    if(rp_index < 0 || rp_index >= g_rp_count) return;
    if(level < 1 || level > 4) return;
 
-   Alert(message);
-   SendNotification(message);
+   if(g_enable_system_alert)
+      Alert(message);
+   if(g_enable_push_notify)
+      SendNotification(message);
    Print("RP_ALERT[", level, "]: ", message);
 
    g_rp_array[rp_index].alert_sent[level - 1] = true;

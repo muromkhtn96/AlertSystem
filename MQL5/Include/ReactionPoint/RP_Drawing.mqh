@@ -277,29 +277,8 @@ void DrawRPLabel(int rp_index)
 
    string name = OBJECT_PREFIX + "LBL_" + IntegerToString(rp.id);
 
-   //--- Position: resistance above zone, support below zone
-   double label_price;
-   if(rp.rp_type == RP_RESISTANCE)
-      label_price = rp.zone_high + PipsToPrice(2);
-   else
-      label_price = rp.zone_low - PipsToPrice(2);
-
-   //--- Anti-overlap: offset if another label nearby (± 30 pips)
-   for(int i = 0; i < g_rp_count; i++)
-   {
-      if(i == rp_index) continue;
-      if(!g_rp_array[i].is_active) continue;
-      double other_price = (g_rp_array[i].rp_type == RP_RESISTANCE) ?
-                           g_rp_array[i].zone_high : g_rp_array[i].zone_low;
-      if(PriceToPips(MathAbs(label_price - other_price)) < 30.0)
-      {
-         if(rp.rp_type == RP_RESISTANCE)
-            label_price += PipsToPrice(5);
-         else
-            label_price -= PipsToPrice(5);
-         break; // one offset is enough
-      }
-   }
+   //--- Position: center of zone vertically, right edge of zone horizontally
+   double label_price = (rp.zone_high + rp.zone_low) / 2.0;
 
    //--- Build label text
    //    Line 1: [icon] [score] [progress_bar] [TYPE]
@@ -331,8 +310,8 @@ void DrawRPLabel(int rp_index)
 
    string full_text = line1 + "\n" + line2;
 
-   //--- Create or update text object
-   datetime label_time = TimeCurrent() + PeriodSeconds() * 5;
+   //--- Create or update text object — right edge of zone (current time)
+   datetime label_time = TimeCurrent();
 
    if(ObjectFind(0, name) < 0)
    {
@@ -352,11 +331,8 @@ void DrawRPLabel(int rp_index)
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 
-   //--- Anchor based on type
-   if(rp.rp_type == RP_RESISTANCE)
-      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
-   else
-      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+   //--- Anchor: right-aligned, vertically centered on zone
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT);
 }
 
 //+------------------------------------------------------------------+
@@ -647,7 +623,8 @@ void RedrawChangedRP()
       else if(rp.is_active)
       {
          DrawRPZone(i);
-         if(!g_clean_chart_mode)
+         //--- Always draw labels for Premium + Level1; others only in full mode
+         if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
             DrawRPLabel(i);
       }
 

@@ -53,10 +53,10 @@ void RotateIfNeeded(string filepath)
    int check = FileOpen(filepath, FILE_READ | FILE_CSV | FILE_ANSI | FILE_COMMON);
    if(check == INVALID_HANDLE) return;  // File doesn't exist yet — OK
 
-   long size = FileSize(check);
+   ulong size = FileSize(check);
    FileClose(check);
 
-   long max_bytes = (long)g_log_max_size_mb * 1024 * 1024;
+   ulong max_bytes = (ulong)g_log_max_size_mb * 1024 * 1024;
    if(size >= max_bytes)
    {
       // Rotate: delete old .bak, rename current to .bak
