@@ -65,17 +65,40 @@ void UpdateCurrentSession()
 //+------------------------------------------------------------------+
 double GetSessionScoreAdj(ENUM_SESSION session)
 {
+   double adj = 0.0;
+
    switch(session)
    {
-      case SESSION_OVERLAP:     return 15.0;
-      case SESSION_LONDON_OPEN: return 10.0;
-      case SESSION_NY_OPEN:     return 10.0;
-      case SESSION_LONDON:      return  5.0;
-      case SESSION_NY:          return  5.0;
-      case SESSION_ASIAN:       return -10.0;
-      case SESSION_DEAD:        return -20.0;
+      case SESSION_OVERLAP:     adj = 15.0;  break;
+      case SESSION_LONDON_OPEN: adj = 10.0;  break;
+      case SESSION_NY_OPEN:     adj = 10.0;  break;
+      case SESSION_LONDON:      adj =  5.0;  break;
+      case SESSION_NY:          adj =  5.0;  break;
+      case SESSION_ASIAN:       adj = -10.0; break;
+      case SESSION_DEAD:        adj = -20.0; break;
    }
-   return 0.0;
+
+   //--- Pair-specific adjustments (P22)
+   if(g_is_gbp_pair)
+   {
+      if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London Open
+      if(session == SESSION_LONDON)      adj += 3.0;  // GBP active throughout London
+      if(session == SESSION_ASIAN)       adj -= 5.0;  // GBP Asian zones unreliable (-10 → -15)
+   }
+
+   if(g_is_jpy_pair)
+   {
+      if(session == SESSION_ASIAN) adj += 7.0;  // JPY active in Asian (-10 → -3)
+      if(session == SESSION_DEAD)  adj += 5.0;  // Less dead for JPY (-20 → -15)
+   }
+
+   if(g_is_cross_pair)
+   {
+      if(session == SESSION_DEAD)    adj += 5.0;  // Crosses less session-dependent
+      if(session == SESSION_OVERLAP) adj -= 5.0;  // Overlap less meaningful for crosses (+15 → +10)
+   }
+
+   return adj;
 }
 
 //+------------------------------------------------------------------+

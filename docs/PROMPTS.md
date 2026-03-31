@@ -2138,6 +2138,1212 @@ PRESET_AUTO: Period()<=M30→M30, <=H1→H1, <=H4→H4, else→D1
 ---
 ---
 
+## PHASE 7: RELIABILITY UPGRADES (P18, P19, P20 — cải thiện xác suất tín hiệu)
+
+### Dependency Graph bổ sung
+```
+Phase 7: P18 (scoring) + P19 (fibo) song song → P20 (trend alignment, cần P18+P19)
+Tất cả cần Phase 1-6 đã hoàn thành.
+```
+
+---
+
+## PROMPT 18: Rebalance Scoring Weights (Sửa RP_Scoring.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Scoring.mqh — Rebalance trọng số Base Score.
+
+MỤC ĐÍCH: Trọng số hiện tại quá "phẳng" — candle pattern (20) gần bằng reaction strength (25).
+Trader kinh nghiệm coi reaction strength là yếu tố quan trọng nhất (institutional interest),
+trong khi candle pattern chỉ là confirmation thứ yếu. Volume cũng cần tăng tầm quan trọng.
+
+=== THAY ĐỔI TRỌNG SỐ BASE SCORE ===
+
+| Component         | Cũ  | Mới  | Lý do                                           |
+|-------------------|-----|------|--------------------------------------------------|
+| Reaction Strength | 25  | 35   | Yếu tố #1 — reaction mạnh = institutional money |
+| Test Count        | 20  | 20   | Giữ nguyên — logic diminishing returns tốt       |
+| Candle Pattern    | 20  | 12   | Chỉ là confirmation, không phải driver           |
+| Fibonacci         | 15  | 10   | Giảm — sẽ chính xác hơn sau P19 (swing-to-swing)|
+| Volume            | 10  | 15   | Tăng — volume confirmation quan trọng hơn pattern|
+| Round Number      | 10  | 8    | Giảm nhẹ — ít impact thực tế                    |
+| Volume Delta      | ±5  | ±5   | Giữ nguyên                                       |
+| TỔNG MAX          | 105 | 105  | Giữ tổng không đổi, cap vẫn = 100               |
+
+=== CHI TIẾT SỬA ===
+
+1. CalcBaseScore(int rp_index): sửa các hệ số
+
+   a) Reaction Strength (max 35, cũ 25):
+      score += MathMin((rp.initial_reaction_pips / atr_pips) * 35.0, 35.0)
+
+   b) Candle Pattern (max 12, cũ 20):
+      PINBAR=12, ENGULFING=10, OUTSIDE_BAR=8, LARGE_WICK=6, NONE=0
+
+   c) Fibonacci Alignment (max 10, cũ 15):
+      618 → 10, 500 → 7, 382 → 4
+
+   d) Volume (max 15, cũ 10):
+      >1.5x MA20 → 15, >1.2x MA20 → 8, else → 0
+
+   e) Round Number (max 8, cũ 10):
+      <= 10 pips → 8, <= 20 pips → 4, else → 0
+
+   f) Test Count, Volume Delta: KHÔNG ĐỔI
+
+2. CalcFibonacciScore(double price): sửa return values
+   618 → return 10.0 (cũ 15.0)
+   500 → return 7.0  (cũ 10.0)
+   382 → return 4.0  (cũ 7.0)
+
+3. CalcVolumeScore(int bar_shift): sửa return values
+   >1.5x → return 15.0 (cũ 10.0)
+   >1.2x → return 8.0  (cũ 5.0)
+
+4. RoundNumberScore(double price): sửa return values
+   <= 10 pips → return 8.0  (cũ 10.0)
+   <= 20 pips → return 4.0  (cũ 5.0)
+
+5. GetCandlePatternScore() (nếu tồn tại trong RP_Detection.mqh):
+   Cập nhật tương ứng: PINBAR=12, ENGULFING=10, OUTSIDE_BAR=8, LARGE_WICK=6
+
+KHÔNG SỬA: CalcFinalScore, các module adjustments, SCORE_CAP.
+CalcBaseScore cap vẫn = MathMin(score, 100.0)
+```
+
+---
+
+## PROMPT 19: Fibonacci Swing-to-Swing Engine (Sửa RP_Utils.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Utils.mqh — Thay thế UpdateFiboCache() bằng
+Fibonacci Swing-to-Swing engine chính xác hơn.
+
+MỤC ĐÍCH: Fibo hiện tại tìm high/low TUYỆT ĐỐI trong N bars lookback → vô nghĩa về
+mặt technical analysis. Fibo chỉ có ý nghĩa khi tính TỪ một swing leg hoàn chỉnh
+(swing high → swing low hoặc ngược lại).
+
+=== CONCEPT ===
+
+Swing Leg = một chuyển động giá rõ ràng từ swing point A đến swing point B.
+Fibonacci retracement chỉ valid khi:
+1. Leg đã hoàn thành (swing B confirmed bằng N bars)
+2. Giá đang retrace (quay lại) chứ không extend
+3. Leg đủ lớn (>= 2x ATR) để có ý nghĩa
+
+Ví dụ Uptrend:
+  Swing Low (A) → Swing High (B) = completed leg
+  Fibo 38.2%, 50%, 61.8% tính từ B xuống A = buy-the-dip levels
+
+Ví dụ Downtrend:
+  Swing High (A) → Swing Low (B) = completed leg
+  Fibo 38.2%, 50%, 61.8% tính từ B lên A = sell-the-rally levels
+
+=== THÊM STRUCT VÀ GLOBALS (trong RP_Utils.mqh) ===
+
+// Thêm vào RP_Defines.mqh hoặc đầu RP_Utils.mqh (trước UpdateFiboCache)
+struct SFiboLeg {
+   double    swing_a_price;    // Điểm bắt đầu leg
+   double    swing_b_price;    // Điểm kết thúc leg
+   int       swing_a_bar;      // Bar index swing A
+   int       swing_b_bar;      // Bar index swing B
+   bool      is_bullish_leg;   // true = A(low)→B(high), false = A(high)→B(low)
+   bool      is_valid;         // true nếu leg >= 2*ATR và confirmed
+   double    fibo_382;         // Level 38.2%
+   double    fibo_500;         // Level 50.0%
+   double    fibo_618;         // Level 61.8%
+   double    fibo_786;         // Level 78.6% (thêm mới — institutional level)
+   void Init() { ZeroMemory(this); }
+};
+
+#define MAX_FIBO_LEGS 3
+SFiboLeg g_fibo_legs[];       // ArrayResize(MAX_FIBO_LEGS) trong OnInit
+int      g_fibo_leg_count = 0;
+
+// GIỮ LẠI g_cached_fibo_618/500/382 cho backward compatibility
+// Nhưng giá trị giờ lấy từ fibo leg GẦN NHẤT (leg[0])
+
+=== THAY THẾ UpdateFiboCache() ===
+
+void UpdateFiboCache():
+  // STEP 1: Tìm swing points trong lookback
+  int lookback = MathMin(g_fibo_lookback_bars, Bars(_Symbol, PERIOD_CURRENT) - 1);
+  if(lookback < 10) return;
+  int N = MathMin(g_swing_lookback, 3); // N nhỏ hơn cho fibo swing detection
+  
+  // Tìm swing highs/lows trong bars[1..lookback] — anti-repainting
+  // Lưu max 6 swing points gần nhất, sắp theo bar index tăng dần (gần nhất = index nhỏ)
+  #define MAX_FIBO_SWINGS 6
+  double swing_prices[MAX_FIBO_SWINGS];
+  int    swing_bars[MAX_FIBO_SWINGS];
+  int    swing_types[MAX_FIBO_SWINGS]; // 1=High, -1=Low
+  int    swing_count = 0;
+  
+  for(int i = N + 1; i <= lookback - N && swing_count < MAX_FIBO_SWINGS; i++):
+    // Check swing high
+    bool is_high = true;
+    for(int j = 1; j <= N; j++):
+      if(iHigh(_Symbol, PERIOD_CURRENT, i) <= iHigh(_Symbol, PERIOD_CURRENT, i-j) ||
+         iHigh(_Symbol, PERIOD_CURRENT, i) <= iHigh(_Symbol, PERIOD_CURRENT, i+j)):
+        is_high = false; break;
+    
+    // Check swing low
+    bool is_low = true;
+    for(int j = 1; j <= N; j++):
+      if(iLow(_Symbol, PERIOD_CURRENT, i) >= iLow(_Symbol, PERIOD_CURRENT, i-j) ||
+         iLow(_Symbol, PERIOD_CURRENT, i) >= iLow(_Symbol, PERIOD_CURRENT, i+j)):
+        is_low = false; break;
+    
+    if(is_high):
+      swing_prices[swing_count] = iHigh(_Symbol, PERIOD_CURRENT, i);
+      swing_bars[swing_count] = i;
+      swing_types[swing_count] = 1;
+      swing_count++;
+    elif(is_low):
+      swing_prices[swing_count] = iLow(_Symbol, PERIOD_CURRENT, i);
+      swing_bars[swing_count] = i;
+      swing_types[swing_count] = -1;
+      swing_count++;
+  
+  if(swing_count < 2):
+    // Không đủ swing → reset cache
+    g_fibo_leg_count = 0;
+    g_cached_fibo_618 = 0.0;
+    g_cached_fibo_500 = 0.0;
+    g_cached_fibo_382 = 0.0;
+    return;
+  
+  // STEP 2: Xây dựng fibo legs từ swing pairs liền kề
+  g_fibo_leg_count = 0;
+  double current = RP_Close(1);
+  
+  for(int i = 0; i < swing_count - 1 && g_fibo_leg_count < MAX_FIBO_LEGS; i++):
+    // Chỉ ghép cặp swing types khác nhau (High+Low hoặc Low+High)
+    if(swing_types[i] == swing_types[i+1]) continue;
+    
+    double a_price = swing_prices[i+1]; // Swing cũ hơn = start
+    double b_price = swing_prices[i];   // Swing mới hơn = end
+    int    a_bar   = swing_bars[i+1];
+    int    b_bar   = swing_bars[i];
+    
+    double leg_size = MathAbs(b_price - a_price);
+    
+    // FILTER: Leg >= 2x ATR
+    if(leg_size < g_cached_atr14 * 2.0) continue;
+    
+    // FILTER: Price đang retrace, không extend
+    bool is_bullish = (b_price > a_price);
+    if(is_bullish):
+      if(current >= b_price || current <= a_price) continue;
+    else:
+      if(current <= b_price || current >= a_price) continue;
+    
+    // Build fibo leg
+    SFiboLeg leg;
+    leg.Init();
+    leg.swing_a_price  = a_price;
+    leg.swing_b_price  = b_price;
+    leg.swing_a_bar    = a_bar;
+    leg.swing_b_bar    = b_bar;
+    leg.is_bullish_leg = is_bullish;
+    leg.is_valid       = true;
+    
+    double range = MathAbs(b_price - a_price);
+    if(is_bullish):
+      leg.fibo_382 = b_price - range * 0.382;
+      leg.fibo_500 = b_price - range * 0.500;
+      leg.fibo_618 = b_price - range * 0.618;
+      leg.fibo_786 = b_price - range * 0.786;
+    else:
+      leg.fibo_382 = b_price + range * 0.382;
+      leg.fibo_500 = b_price + range * 0.500;
+      leg.fibo_618 = b_price + range * 0.618;
+      leg.fibo_786 = b_price + range * 0.786;
+    
+    g_fibo_legs[g_fibo_leg_count] = leg;
+    g_fibo_leg_count++;
+  
+  // STEP 3: Update backward-compatible cache từ leg[0]
+  if(g_fibo_leg_count > 0):
+    g_cached_fibo_618  = g_fibo_legs[0].fibo_618;
+    g_cached_fibo_500  = g_fibo_legs[0].fibo_500;
+    g_cached_fibo_382  = g_fibo_legs[0].fibo_382;
+    g_cached_fibo_high = MathMax(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
+    g_cached_fibo_low  = MathMin(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
+  else:
+    g_cached_fibo_618 = 0.0;
+    g_cached_fibo_500 = 0.0;
+    g_cached_fibo_382 = 0.0;
+    g_cached_fibo_high = 0.0;
+    g_cached_fibo_low  = 0.0;
+
+=== SỬA CalcFibonacciScore() (RP_Scoring.mqh) ===
+
+double CalcFibonacciScore(double price):
+  double best_score = 0.0;
+  double tolerance = PipsToPrice(g_fibo_tolerance_pips);
+  bool   found_in_another_leg = false;
+  
+  for(int i = 0; i < g_fibo_leg_count; i++):
+    if(!g_fibo_legs[i].is_valid) continue;
+    double score = 0.0;
+    
+    if(MathAbs(price - g_fibo_legs[i].fibo_618) <= tolerance)      score = 10.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_786) <= tolerance) score = 8.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_500) <= tolerance) score = 7.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_382) <= tolerance) score = 4.0;
+    
+    // Fibo confluence: RP trùng level từ 2+ legs → +3
+    if(score > 0.0 && found_in_another_leg) score += 3.0;
+    if(score > 0.0) found_in_another_leg = true;
+    
+    if(score > best_score) best_score = score;
+  
+  return MathMin(best_score, 13.0); // Cap: 10 base + 3 confluence bonus
+
+=== THAY ĐỔI TRONG OnInit (RP_Main.mq5) ===
+
+Thêm: ArrayResize(g_fibo_legs, MAX_FIBO_LEGS);
+
+LƯU Ý:
+- Anti-repainting: chỉ dùng bars[1..N]
+- Performance: tính 1 lần/bar, max 6 swing points scan
+- Backward compatible: g_cached_fibo_* vẫn hoạt động
+```
+
+---
+
+## PROMPT 20: Multi-TF Trend Alignment Filter (Sửa RP_Confluence.mqh + RP_Scoring.mqh)
+
+```
+Sửa RP_Confluence.mqh, RP_Scoring.mqh, RP_EntrySetup.mqh, RP_Main.mq5 — Thêm Multi-TF
+Trend Alignment filter.
+
+MỤC ĐÍCH: Kiểm tra trend direction alignment giữa current TF + HTF_1 + HTF_2.
+RP SUPPORT trong uptrend trên tất cả TFs = high probability.
+RP SUPPORT counter-trend trên tất cả TFs = extremely risky.
+
+=== THÊM GLOBALS (trong RP_Utils.mqh) ===
+
+struct SHTFTrend {
+   ENUM_TIMEFRAMES  tf;
+   ENUM_TREND_DIR   trend;
+   bool             is_valid;
+   datetime         last_updated;
+   void Init() { ZeroMemory(this); }
+};
+
+SHTFTrend g_htf_trends[3];        // [0]=current TF, [1]=HTF_1, [2]=HTF_2
+bool      g_use_trend_alignment = true;
+
+=== THÊM FUNCTIONS (trong RP_Confluence.mqh, sau ApplyConfluenceScoring) ===
+
+1. UpdateHTFTrends():
+   - Gọi per-bar trong Main OnCalculate, STEP 1 (sau UpdateMarketRegime)
+   
+   // Current TF — đã có sẵn
+   g_htf_trends[0].tf    = Period();
+   g_htf_trends[0].trend = g_current_trend;
+   g_htf_trends[0].is_valid = true;
+   g_htf_trends[0].last_updated = TimeCurrent();
+   
+   // HTF_1 và HTF_2
+   ENUM_TIMEFRAMES tfs[2] = {g_htf_1, g_htf_2};
+   for(int t = 0; t < 2; t++):
+     int idx = t + 1;
+     g_htf_trends[idx].tf = tfs[t];
+     
+     double htf_close[];
+     int copied = CopyClose(_Symbol, tfs[t], 0, 21, htf_close);
+     if(copied < 21):
+       g_htf_trends[idx].is_valid = false;
+       continue;
+     
+     ArraySetAsSeries(htf_close, true);
+     
+     // Trend detection: HH+HL vs LH+LL trên 20 bars
+     // Đơn giản: so sánh close[1] vs close[10] vs close[20]
+     bool up1   = htf_close[1] > htf_close[10];
+     bool up2   = htf_close[10] > htf_close[20];
+     bool down1 = htf_close[1] < htf_close[10];
+     bool down2 = htf_close[10] < htf_close[20];
+     
+     if(up1 && up2)        g_htf_trends[idx].trend = TREND_UP;
+     else if(down1 && down2) g_htf_trends[idx].trend = TREND_DOWN;
+     else                    g_htf_trends[idx].trend = TREND_NONE;
+     
+     g_htf_trends[idx].is_valid = true;
+     g_htf_trends[idx].last_updated = TimeCurrent();
+
+2. GetTrendAlignmentScore(ENUM_RP_TYPE rp_type): double
+   - if(!g_use_trend_alignment) return 0.0;
+   
+   int aligned = 0, counter = 0, total = 0;
+   
+   for(int i = 0; i < 3; i++):
+     if(!g_htf_trends[i].is_valid) continue;
+     total++;
+     
+     bool is_aligned;
+     if(rp_type == RP_SUPPORT):
+       is_aligned = (g_htf_trends[i].trend == TREND_UP || g_htf_trends[i].trend == TREND_NONE);
+     else:
+       is_aligned = (g_htf_trends[i].trend == TREND_DOWN || g_htf_trends[i].trend == TREND_NONE);
+     
+     if(is_aligned) aligned++; else counter++;
+   
+   if(total == 0) return 0.0;
+   
+   if(aligned == total)     return 20.0;   // Tất cả đồng thuận
+   if(aligned >= total - 1) return 10.0;   // 2/3 aligned
+   
+   double penalty = (counter == total) ? -25.0 : -15.0;
+   
+   // CHoCH exception: giảm penalty 50% nếu vừa có CHoCH
+   if(g_choch_detected && g_last_choch_bar <= 10)
+     penalty *= 0.5;
+   
+   return penalty;
+
+3. IsTrendAligned(ENUM_RP_TYPE rp_type): bool
+   - return GetTrendAlignmentScore(rp_type) >= 0.0;
+
+=== TÍCH HỢP VÀO CalcFinalScore (RP_Scoring.mqh) ===
+
+double adjusted = rp.base_score
+   + GetRegimeScoreAdj(rp.rp_type)
+   - CalcDecayPenalty(rp_index)
+   + CalcRecentBonus(rp_index)
+   + GetSessionScoreAdj(rp.session_formed)
+   + GetDayOfWeekAdj()
+   + GetStructureScoreAdj(rp_index)
+   + GetLiquiditySweepBonus(rp_index)
+   + GetTrendAlignmentScore(rp.rp_type)    // ← THÊM MỚI: [-25, +20]
+   + (rp.is_role_reversed ? 15.0 : 0.0)
+   + ((rp.is_fresh && rp.test_count == 0) ? 10.0 : 0.0);
+
+=== TÍCH HỢP VÀO CheckEntryConditions (RP_EntrySetup.mqh) ===
+
+Thêm filter (f) sau các check hiện tại:
+  // f) Trend alignment
+  if(g_use_trend_alignment && !IsTrendAligned(rp.rp_type)):
+    if(rp.final_score < 110) continue; // Skip — counter-trend without premium
+    // Premium (>=110): vẫn cho phép entry counter-trend
+
+=== TÍCH HỢP VÀO OnCalculate (RP_Main.mq5) ===
+
+// STEP 1 — sau UpdateMarketRegime():
+if(g_use_trend_alignment)
+   UpdateHTFTrends();
+
+=== INPUT MỚI (RP_Main.mq5) ===
+
+// TREND ALIGNMENT
+input bool Use_Trend_Alignment = true;
+
+ApplyTFPreset: g_use_trend_alignment = Use_Trend_Alignment;
+
+=== DASHBOARD (RP_Dashboard.mqh) ===
+
+// Thêm dòng sau REGIME:
+// "TREND   CTF:↑  H4:↑  D1:→   ALIGNED"     (clrLime)
+// "TREND   CTF:↑  H4:↓  D1:↓   COUNTER ⚠"   (clrTomato)
+string GetTrendArrow(ENUM_TREND_DIR t):
+  if(t == TREND_UP) return "↑";
+  if(t == TREND_DOWN) return "↓";
+  return "→";
+
+LƯU Ý:
+- Performance: CopyClose 21 bars × 2 TFs = rất nhẹ, 1 lần/bar
+- Anti-repainting: detect trend trên closed bars[1..20]
+- CHoCH exception: reversal play hợp lệ khi structure vừa đổi
+- Premium exception: score >=110 vẫn cho phép entry counter-trend
+```
+
+## PROMPT 21: Dynamic Zone Width (Sửa RP_Detection.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Detection.mqh — Zone width dựa trên candle thực tế
+thay vì cố định g_zone_width_pips.
+
+MỤC ĐÍCH: Zone width cố định (VD: 4 pips mỗi bên) gây 2 vấn đề:
+- Candle rejection lớn (20 pips body) → zone 4 pips = quá hẹp → giá "miss" zone
+- Candle nhỏ (3 pips body) tại ranging → zone 4 pips = quá rộng → false signal
+Zone phải khớp kích thước thực tế của phản ứng giá tại swing point.
+
+=== CONCEPT ===
+
+Zone = vùng mà institutional money đã phản ứng, xác định bởi candle tại swing point:
+
+SUPPORT zone:
+  zone_low  = low của swing candle (đáy phản ứng)
+  zone_high = MathMax(open, close) của swing candle (body top)
+  → Zone bao trùm TOÀN BỘ body + lower wick = vùng mà buyer đã mua
+
+RESISTANCE zone:
+  zone_high = high của swing candle (đỉnh phản ứng)
+  zone_low  = MathMin(open, close) của swing candle (body bottom)
+  → Zone bao trùm TOÀN BỘ body + upper wick = vùng mà seller đã bán
+
+=== SAFETY CLAMPS ===
+
+Zone quá hẹp hoặc quá rộng đều không tốt:
+  double zone_range = zone_high - zone_low;
+  double min_width  = PipsToPrice(g_zone_width_pips / 2.0);  // Floor: nửa width cũ
+  double max_width  = g_cached_atr14 * 1.5;                  // Ceiling: 1.5x ATR
+
+  if(zone_range < min_width):
+    // Candle quá nhỏ → pad đều 2 bên bằng min_width
+    double center = (zone_high + zone_low) / 2.0;
+    zone_high = center + min_width / 2.0;
+    zone_low  = center - min_width / 2.0;
+
+  if(zone_range > max_width):
+    // Candle quá lớn (news spike) → clamp về max_width, giữ từ edge phản ứng
+    if(rp_type == RP_SUPPORT):
+      zone_high = zone_low + max_width;  // Giữ đáy, cắt trên
+    else:
+      zone_low = zone_high - max_width;  // Giữ đỉnh, cắt dưới
+
+=== SỬA CreateRP() ===
+
+void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
+              ENUM_CANDLE_PATTERN pattern, double reaction_pips):
+
+  // THAY THẾ 2 dòng cũ:
+  //   rp.zone_high = price + PipsToPrice(g_zone_width_pips / 2.0);
+  //   rp.zone_low  = price - PipsToPrice(g_zone_width_pips / 2.0);
+
+  // BẰNG:
+  double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_close = iClose(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_low   = iLow(_Symbol, PERIOD_CURRENT, bar_index);
+
+  if(rp_type == RP_SUPPORT):
+    rp.zone_low  = bar_low;
+    rp.zone_high = MathMax(bar_open, bar_close);  // Body top
+  else: // RP_RESISTANCE
+    rp.zone_high = bar_high;
+    rp.zone_low  = MathMin(bar_open, bar_close);  // Body bottom
+
+  // Safety clamps
+  double zone_range = rp.zone_high - rp.zone_low;
+  double min_width  = PipsToPrice(g_zone_width_pips / 2.0);
+  double max_width  = (g_cached_atr14 > 0) ? g_cached_atr14 * 1.5 : PipsToPrice(30);
+
+  if(zone_range < min_width):
+    double center = (rp.zone_high + rp.zone_low) / 2.0;
+    rp.zone_high = center + min_width / 2.0;
+    rp.zone_low  = center - min_width / 2.0;
+
+  if(zone_range > max_width):
+    if(rp_type == RP_SUPPORT):
+      rp.zone_high = rp.zone_low + max_width;
+    else:
+      rp.zone_low = rp.zone_high - max_width;
+
+  // rp.price giữ nguyên = swing point gốc (dùng cho scoring/distance calc)
+
+KHÔNG SỬA gì khác. Scoring, alerts, confluence vẫn dùng rp.price để tính khoảng cách.
+Zone_high/zone_low chỉ dùng cho:
+- Drawing (DrawRPZone)
+- Breakout check (close < zone_low hoặc close > zone_high)
+- Entry trigger (close trong zone)
+- Test count (giá chạm zone)
+
+LƯU Ý:
+- g_zone_width_pips giờ chỉ dùng làm FLOOR (minimum width), không phải fixed width
+- Anti-repainting: iOpen/iClose/iHigh/iLow tại bar_index (confirmed bar, không phải bar[0])
+- ATR clamp ngăn news spike tạo zone quá lớn (vô nghĩa)
+```
+
+---
+
+## PROMPT 22: Pair-Adaptive Parameters (Sửa RP_Utils.mqh + RP_Session.mqh + RP_Main.mq5)
+
+```
+Thêm auto-scaling parameters dựa trên ATR + pair detection.
+Tối ưu cho GBPUSD và CADJPY nhưng hoạt động đúng trên mọi pair.
+
+MỤC ĐÍCH: Default preset tối ưu cho EURUSD (volatility thấp). Trên pair volatile
+(GBP, JPY crosses), các tham số khoảng cách/width quá nhỏ → zones dồn cục, false breakout.
+
+=== CONCEPT ===
+
+Thay vì hardcode preset per pair, dùng ATR ratio để auto-scale:
+  atr_ratio = ATR(14) hiện tại / ATR baseline (50 pips cho H4)
+  Nếu pair volatile hơn baseline → scale UP các tham số khoảng cách
+
+Kết hợp pair detection (từ symbol name) để điều chỉnh session scoring:
+  JPY cross → Asian session có ý nghĩa (giảm penalty)
+  GBP pair → London session quan trọng hơn (tăng bonus)
+
+=== THÊM FUNCTION MỚI (trong RP_Utils.mqh) ===
+
+1. ApplyVolatilityScaling():
+   - Gọi SAU UpdateBarCache() lần đầu (khi g_cached_atr14 đã có giá trị)
+   - Gọi MỘT LẦN trong OnCalculate khi first_run == true
+   
+   // ATR baseline theo TF (trung bình EURUSD)
+   double atr_baseline;
+   switch(Period()):
+     case PERIOD_M30: atr_baseline = PipsToPrice(15); break;
+     case PERIOD_H1:  atr_baseline = PipsToPrice(25); break;
+     case PERIOD_H4:  atr_baseline = PipsToPrice(50); break;
+     case PERIOD_D1:  atr_baseline = PipsToPrice(100); break;
+     default:         atr_baseline = PipsToPrice(25); break;
+   
+   double ratio = g_cached_atr14 / atr_baseline;
+   ratio = MathMax(0.7, MathMin(ratio, 2.5)); // Clamp [0.7, 2.5]
+   
+   // Scale distance parameters
+   g_min_rp_distance_pips    = (int)MathRound(g_min_rp_distance_pips * ratio);
+   g_min_reaction_move_pips  = (int)MathRound(g_min_reaction_move_pips * ratio);
+   g_breakout_confirm_pips   = (int)MathRound(g_breakout_confirm_pips * ratio);
+   g_confluence_merge_pips   = (int)MathRound(g_confluence_merge_pips * ratio);
+   g_fibo_tolerance_pips     = (int)MathRound(g_fibo_tolerance_pips * ratio);
+   g_proximity_alert_pips    = (int)MathRound(g_proximity_alert_pips * ratio);
+   g_reset_alert_pips        = (int)MathRound(g_reset_alert_pips * ratio);
+   g_sl_buffer_pips          = (int)MathRound(g_sl_buffer_pips * ratio);
+   g_zone_width_pips         = (int)MathMax(MathRound(g_zone_width_pips * ratio), 3);   // P22 fix: min zone width
+   g_min_candle_size_pips    = (int)MathMax(MathRound(g_min_candle_size_pips * ratio), 2); // P22 fix: candle filter
+   
+   Print("RP: ATR ratio = ", DoubleToString(ratio, 2),
+         " | MinDist=", g_min_rp_distance_pips,
+         " | BreakConf=", g_breakout_confirm_pips);
+
+2. DetectPairType():
+   - Gọi trong OnInit, lưu kết quả vào globals
+   
+   string symbol = _Symbol;
+   
+   // Detect currency components
+   g_is_jpy_pair = (StringFind(symbol, "JPY") >= 0);
+   g_is_gbp_pair = (StringFind(symbol, "GBP") >= 0);
+   g_is_cross_pair = !( // Không phải major
+     StringFind(symbol, "EURUSD") >= 0 || StringFind(symbol, "GBPUSD") >= 0 ||
+     StringFind(symbol, "USDJPY") >= 0 || StringFind(symbol, "USDCHF") >= 0 ||
+     StringFind(symbol, "AUDUSD") >= 0 || StringFind(symbol, "USDCAD") >= 0 ||
+     StringFind(symbol, "NZDUSD") >= 0
+   );
+
+=== THÊM GLOBALS (RP_Utils.mqh) ===
+
+bool g_is_jpy_pair   = false;
+bool g_is_gbp_pair   = false;
+bool g_is_cross_pair = false;
+
+=== SỬA SESSION SCORING (RP_Session.mqh) ===
+
+GetSessionScoreAdj(ENUM_SESSION session):
+  // Thay bảng cố định bằng pair-adaptive:
+  
+  double adj = 0.0;
+  switch(session):
+    case SESSION_OVERLAP:    adj = 15.0; break;
+    case SESSION_LONDON_OPEN: adj = 10.0; break;
+    case SESSION_NY_OPEN:    adj = 10.0; break;
+    case SESSION_LONDON:     adj = 5.0;  break;
+    case SESSION_NY:         adj = 5.0;  break;
+    case SESSION_ASIAN:      adj = -10.0; break;
+    case SESSION_DEAD:       adj = -20.0; break;
+  
+  // Pair-specific adjustments:
+  if(g_is_gbp_pair):
+    if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London open
+    if(session == SESSION_LONDON)      adj += 3.0;
+    if(session == SESSION_ASIAN)       adj -= 5.0;  // GBP Asian zones unreliable (-10 → -15)
+  
+  if(g_is_jpy_pair):
+    if(session == SESSION_ASIAN) adj += 7.0;         // JPY active in Asian (-10 → -3)
+    if(session == SESSION_DEAD)  adj += 5.0;         // Less dead for JPY (-20 → -15)
+  
+  if(g_is_cross_pair):
+    if(session == SESSION_DEAD)    adj += 5.0;       // Crosses less session-dependent
+    if(session == SESSION_OVERLAP) adj -= 5.0;       // Overlap less meaningful for crosses (+15 → +10)
+  
+  return adj;
+
+=== SỬA SPREAD FILTER (RP_SpreadFilter.mqh hoặc RP_Utils.mqh) ===
+
+Trong ApplyTFPreset hoặc ApplyVolatilityScaling:
+  // Cross pairs have wider spreads — relax thresholds
+  if(g_is_cross_pair):
+    g_spread_alert_multiplier = MathMax(g_spread_alert_multiplier, 2.5);
+    g_spread_block_multiplier = MathMax(g_spread_block_multiplier, 4.0);
+
+=== TÍCH HỢP VÀO MAIN ===
+
+OnInit():
+  DetectPairType();  // Sau ApplyTFPreset, trước InitIndicatorHandles
+
+OnCalculate (khi first_run == true, SAU UpdateBarCache):
+  static bool scaling_applied = false;
+  if(!scaling_applied && g_cached_atr14 > 0):
+    ApplyVolatilityScaling();
+    scaling_applied = true;
+
+LƯU Ý:
+- ApplyVolatilityScaling chỉ gọi 1 LẦN (không re-scale mỗi bar)
+- ratio clamp [0.7, 2.5]: pair ít volatile không bị scale quá nhỏ
+- Print log để trader biết ratio đang dùng
+- Spread filter nới cho cross pair — tránh block entry liên tục trên CADJPY
+- Session scoring vẫn giữ base values, chỉ thêm pair-specific bonus/reduction
+```
+
+---
+
+## PROMPT 23: Performance Optimization — Batch Copy & UI Efficiency (Sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
+
+```
+Tối ưu hiệu năng toàn bộ indicator: thay thế per-bar iHigh/iLow loops bằng batch
+CopyHigh/CopyLow, pre-allocate arrays, giảm object API calls.
+
+MỤC ĐÍCH: Giảm per-bar system calls từ ~1,200 xuống ~10. Chart mượt hơn, đặc biệt
+trên M30/H1 với nhiều bars.
+
+=== FIX 1: UpdateFiboCache — batch copy (RP_Utils.mqh) ===
+
+TRƯỚC: Gọi iHigh/iLow trong nested loop = ~540 calls/bar
+SAU: CopyHigh + CopyLow 1 lần, dùng array access
+
+void UpdateFiboCache():
+  // Thay vì iHigh(_Symbol, PERIOD_CURRENT, i) trong loop:
+  
+  // BATCH COPY tại đầu function:
+  double highs[], lows[];
+  int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, lookback + 1, highs);
+  int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, lookback + 1, lows);
+  if(copied_h <= 0 || copied_l <= 0) return;
+  ArraySetAsSeries(highs, true);
+  ArraySetAsSeries(lows, true);
+  
+  // Trong loop dùng highs[i], lows[i] thay vì iHigh/iLow:
+  int scan_limit = MathMin(lookback - N, copied_h - 1);
+  for(int i = N + 1; i <= scan_limit && swing_count < MAX_FIBO_SWINGS; i++):
+    // Swing high check:
+    if(highs[i] < highs[i - j] || highs[i] < highs[i + j]) ...
+    // Swing low check:
+    if(lows[i] > lows[i - j] || lows[i] > lows[i + j]) ...
+    // Save swing:
+    swing_prices[swing_count] = highs[i]; // hoặc lows[i]
+
+Kết quả: 540 system calls → 2 CopyHigh/CopyLow calls
+
+=== FIX 2: DetectSwingPoints — batch copy (RP_Detection.mqh) ===
+
+TRƯỚC: RP_High/RP_Low trong nested loop = ~9,900 calls (first run, 500 bars × N=5)
+SAU: CopyHigh + CopyLow 1 lần
+
+void DetectSwingPoints(int bars_to_scan):
+  int copy_count = limit + N + 1;
+  double highs[], lows[];
+  int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, copy_count, highs);
+  int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, copy_count, lows);
+  if(copied_h <= 0 || copied_l <= 0) return;
+  ArraySetAsSeries(highs, true);
+  ArraySetAsSeries(lows, true);
+  
+  int safe_limit = MathMin(limit, copied_h - N - 1);
+  
+  for(int i = N + 1; i < safe_limit; i++):
+    double high_i = highs[i];
+    double low_i  = lows[i];
+    
+    // Swing high: dùng highs[i+j], highs[i-j] thay vì RP_High()
+    // Swing low:  dùng lows[i+j], lows[i-j] thay vì RP_Low()
+
+LƯU Ý: RP_High/RP_Low wrappers vẫn giữ cho các module khác dùng (bar đơn lẻ).
+DetectSwingPoints là trường hợp đặc biệt cần scan hàng trăm bars → batch copy hiệu quả hơn.
+
+Kết quả: 9,900 system calls → 2 CopyHigh/CopyLow calls
+
+=== FIX 3: MergeClusterZones — pre-allocate (RP_Confluence.mqh) ===
+
+TRƯỚC: ArrayResize(entries, total+1, 50) trong mỗi iteration = 50+ allocations
+SAU: Pre-allocate 1 lần
+
+void MergeClusterZones():
+  int max_entries = g_rp_count + g_htf_swing_count;
+  SPriceEntry entries[];
+  ArrayResize(entries, max_entries);  // 1 LẦN
+  int total = 0;
+  
+  // Loop: chỉ gán entries[total], KHÔNG ArrayResize
+  for(int i = 0; i < g_rp_count; i++):
+    if(!g_rp_array[i].is_active) continue;
+    entries[total].price = g_rp_array[i].price;
+    // ...
+    total++;
+
+Kết quả: 50+ allocations → 1 allocation
+
+=== FIX 4: DrawRPZone — lazy property update (RP_Drawing.mqh) ===
+
+TRƯỚC: Set 7 ObjectSet properties cho MỌI RP MỌI bar (600+ calls/bar)
+SAU: Set static properties 1 lần khi tạo, chỉ update dirty RPs
+
+void DrawRPZone(int rp_index):
+  if(ObjectFind(0, name) < 0):
+    ObjectCreate(...);
+    // SET STATIC PROPS ONCE: FILL, BACK, SELECTABLE, HIDDEN, STYLE
+  else:
+    // Chỉ update time_end (extend zone forward) — 1 call
+    ObjectSetInteger(0, name, OBJPROP_TIME, 1, time_end);
+  
+  // Color/price/style: CHỈ update khi g_rp_dirty[rp_index] == true
+  if(g_rp_dirty[rp_index]):
+    ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
+    ObjectSetDouble(0, name, OBJPROP_PRICE, 0, rp.zone_high);
+    ObjectSetDouble(0, name, OBJPROP_PRICE, 1, rp.zone_low);
+    // Update style nếu level thay đổi
+
+Kết quả: 7 calls × 100 RPs = 700 → 1 call × 100 RPs = 100 (khi không dirty)
+
+=== TỔNG KẾT HIỆU NĂNG ===
+
+| Metric          | Trước      | Sau       | Giảm   |
+|-----------------|------------|-----------|--------|
+| Per-bar calls   | ~1,200     | ~10       | 99%    |
+| First-run calls | ~10,500    | ~10       | 99%    |
+| Memory allocs   | 50+/bar    | 1/bar     | 98%    |
+| UI object calls | 700/bar    | 100/bar   | 86%    |
+
+LƯU Ý:
+- CopyHigh/CopyLow trả về dữ liệu đã buffered bởi terminal → rất nhanh
+- ArraySetAsSeries(true) bắt buộc sau Copy để index 0 = bar mới nhất
+- Anti-repainting vẫn đảm bảo: array index >= 1 (bar[0] không dùng)
+- Các module khác (CheckBreakoutsAndRetests, CalcRecentBonus) vẫn dùng
+  RP_Close/RP_High/RP_Low cho bar đơn lẻ — không cần batch
+```
+
+---
+
+## PROMPT 24: Zone Precision Enhancement (Sửa RP_Defines.mqh + RP_Detection.mqh)
+
+```
+Nâng cao chất lượng zone — zone chính xác ngay điểm phản ứng, không quá to hoặc quá nhỏ.
+3 cải tiến: Wick Ratio Filter, ATR-Adaptive Width Cap, Re-test Refinement.
+
+Sửa file: RP_Defines.mqh, RP_Detection.mqh
+Phụ thuộc: P21 (Dynamic Zone Width) — mở rộng logic zone width hiện tại
+
+=== P24a: WICK RATIO FILTER ===
+
+MỤC ĐÍCH: Nến có wick dài (>60% range) tạo zone quá rộng vì lấy toàn bộ body.
+Zone chỉ cần bám sát vùng reaction (liquidity grab area), không cần toàn bộ candle.
+
+LOGIC (trong CreateRP(), SAU khi set zone_high/zone_low từ candle body, TRƯỚC safety clamps):
+
+  double bar_range = bar_high - bar_low;
+
+  if(bar_range > 0.0):
+    double body_top    = MathMax(bar_open, bar_close);
+    double body_bottom = MathMin(bar_open, bar_close);
+    double upper_wick  = bar_high - body_top;
+    double lower_wick  = body_bottom - bar_low;
+    double trim_width  = bar_range * 0.30;  // zone = 30% of candle range
+
+    if(rp_type == RP_SUPPORT && lower_wick >= bar_range * 0.60):
+      // Wick dài dưới: liquidity grab ở đáy → zone bám sát wick tip
+      rp.zone_low  = bar_low;
+      rp.zone_high = bar_low + trim_width;
+
+    else if(rp_type == RP_RESISTANCE && upper_wick >= bar_range * 0.60):
+      // Wick dài trên: liquidity grab ở đỉnh → zone bám sát wick tip
+      rp.zone_high = bar_high;
+      rp.zone_low  = bar_high - trim_width;
+
+LÝ DO dùng bar_range * 0.30 thay vì body_size * 0.5:
+- Pinbar body rất nhỏ (5-10% range) → body_size * 0.5 tạo zone 2-3 pips = quá hẹp
+- 30% range cho zone đủ buffer mà vẫn tập trung vào vùng liquidity grab
+- VÍ DỤ: range 50 pips → zone = 15 pips (hợp lý cho cả M15 lẫn H4)
+
+
+=== P24b: ATR-ADAPTIVE WIDTH CAP THEO TIMEFRAME ===
+
+MỤC ĐÍCH: Thay max_width = 1.5x ATR cố định bằng multiplier theo TF.
+TF thấp cần zone chính xác hơn, TF cao cho phép zone rộng hơn.
+
+LOGIC (trong CreateRP(), thay dòng tính max_width):
+
+  double atr_multiplier = 1.0;
+  ENUM_TIMEFRAMES tf = Period();
+  if(tf <= PERIOD_M15)
+    atr_multiplier = 0.5;       // M1-M15: zone chặt, scalping precision
+  else if(tf <= PERIOD_H4)
+    atr_multiplier = 0.7;       // M30-H4: zone trung bình
+  else
+    atr_multiplier = 1.0;       // D1+: zone rộng hơn, swing trading
+
+  double max_width = (g_cached_atr14 > 0.0) ? g_cached_atr14 * atr_multiplier : PipsToPrice(30);
+
+VÍ DỤ thực tế:
+  ATR14 = 20 pips trên M15 → max zone = 10 pips (0.5x)
+  ATR14 = 50 pips trên H4  → max zone = 35 pips (0.7x)
+  ATR14 = 100 pips trên D1 → max zone = 100 pips (1.0x)
+
+
+=== P24c: RE-TEST REFINEMENT — ZONE TỰ THU HẸP ===
+
+MỤC ĐÍCH: Mỗi lần zone bị test, thu hẹp zone dựa vào điểm phản ứng thực tế.
+Zone "học" từ price action → càng test càng chính xác.
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  double zone_high_original;   // Lưu zone edge ban đầu
+  double zone_low_original;    // Để có thể debug/so sánh
+
+  Init():
+    zone_high_original = 0.0;
+    zone_low_original  = 0.0;
+
+BƯỚC 2 — Lưu original edges trong CreateRP() (RP_Detection.mqh):
+
+  // SAU safety clamps, TRƯỚC set time_formed:
+  rp.zone_high_original = rp.zone_high;
+  rp.zone_low_original  = rp.zone_low;
+
+BƯỚC 3 — Refinement logic trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+
+  // Trong block if(!is_breakout), SAU test_count++:
+  // Dùng WEIGHTED AVERAGE (60/40) thay vì snap trực tiếp → tránh shallow touch khoá zone
+  double min_zone = PipsToPrice(g_zone_width_pips / 2.0);
+
+  if(rp.rp_type == RP_SUPPORT):
+    if(low_1 > rp.zone_low_original):
+      // Shallow test → thu hẹp dần (weighted average)
+      double target = rp.zone_low * 0.6 + low_1 * 0.4;
+      target = MathMax(target, rp.zone_low_original);  // Không vượt original
+      if(rp.zone_high - target >= min_zone):
+        rp.zone_low = target;
+
+    else if(low_1 < rp.zone_low && low_1 >= rp.zone_low_original):
+      // Test sâu hơn edge hiện tại → expand lại về hướng original
+      double target = rp.zone_low * 0.6 + low_1 * 0.4;
+      target = MathMax(target, rp.zone_low_original);
+      rp.zone_low = target;
+
+  else: // RP_RESISTANCE (logic đối xứng)
+    if(high_1 < rp.zone_high_original):
+      double target = rp.zone_high * 0.6 + high_1 * 0.4;
+      target = MathMin(target, rp.zone_high_original);
+      if(target - rp.zone_low >= min_zone):
+        rp.zone_high = target;
+
+    else if(high_1 > rp.zone_high && high_1 <= rp.zone_high_original):
+      double target = rp.zone_high * 0.6 + high_1 * 0.4;
+      target = MathMin(target, rp.zone_high_original);
+      rp.zone_high = target;
+
+QUY TẮC QUAN TRỌNG:
+1. Dùng weighted average 60/40 — KHÔNG snap trực tiếp (tránh shallow touch khoá zone)
+2. Zone có thể EXPAND lại nếu test sâu hơn (nhưng không vượt original)
+3. Giữ minimum width (g_zone_width_pips / 2) — zone không bao giờ nhỏ hơn floor
+4. zone_high_original / zone_low_original giữ nguyên để debug + làm ceiling/floor
+5. rp.price (swing point gốc) KHÔNG thay đổi — chỉ zone visual/detection thay đổi
+
+VÍ DỤ minh họa (weighted average):
+  Zone Support ban đầu: [1.0800 - 1.0850] (50 pips), original_low = 1.0800
+  Test 1: low_1 = 1.0845 (shallow touch)
+    target = 1.0800 * 0.6 + 1.0845 * 0.4 = 1.0818
+    zone = [1.0818 - 1.0850] = 32 pips ✓ (KHÔNG bị khoá ở 5 pips)
+
+  Test 2: low_1 = 1.0830
+    target = 1.0818 * 0.6 + 1.0830 * 0.4 = 1.0823
+    zone = [1.0823 - 1.0850] = 27 pips ✓ (thu hẹp dần)
+
+  Test 3: low_1 = 1.0805 (sâu hơn edge hiện tại)
+    target = 1.0823 * 0.6 + 1.0805 * 0.4 = 1.0816
+    zone = [1.0816 - 1.0850] = 34 pips ✓ (expand lại hợp lý)
+
+  → Zone hội tụ dần về vùng giá thực sự có phản ứng institutional
+
+LƯU Ý:
+- Anti-repainting: dùng bar[1] data (low_1, high_1) — đã có sẵn trong function
+- Drawing sẽ tự cập nhật vì dùng rp.zone_high/zone_low
+- Confluence check dùng zone edges → zone thu hẹp = confluence chính xác hơn
+
+
+=== P24d: ZONE PRECISION SCORE — KẾT NỐI ZONE QUALITY VÀO SCORING ===
+
+MỤC ĐÍCH: Scoring hệ thống KHÔNG biết zone chính xác hay không.
+P24a-c cải thiện zone geometry nhưng scoring không phản ánh. Cần thêm
+CalcZonePrecisionScore() để thưởng/phạt zone dựa trên precision.
+
+BƯỚC 1 — Thêm field vào SReactionPoint (RP_Defines.mqh):
+
+  bool has_wick_filter;   // true nếu P24a đã trim zone
+
+  Init():
+    has_wick_filter = false;
+
+BƯỚC 2 — Set flag trong CreateRP() (RP_Detection.mqh):
+
+  // Trong block wick filter (P24a), khi trim xảy ra:
+  rp.has_wick_filter = true;
+
+BƯỚC 3 — Thêm CalcZonePrecisionScore() (RP_Scoring.mqh), TRƯỚC CalcBaseScore():
+
+  double CalcZonePrecisionScore(int rp_index):
+    double zone_width = rp.zone_high - rp.zone_low;
+    double width_ratio = zone_width / g_cached_atr14;
+
+    // 1. Tight zone: width < 0.3x ATR → +5 (institutional precision)
+    if(width_ratio < 0.30): score += 5.0;
+    // Penalty: width > 0.8x ATR → -5 (zone quá rộng)
+    else if(width_ratio > 0.80): score -= 5.0;
+
+    // 2. Retest-refined: test_count >= 2 AND zone đã shrunk >= 15% → +5
+    if(rp.test_count >= 2):
+      double original_width = zone_high_original - zone_low_original;
+      if(zone_width < original_width * 0.85): score += 5.0;
+
+    // 3. Wick filter applied → +3 (zone targets liquidity grab)
+    if(rp.has_wick_filter): score += 3.0;
+
+    return score;  // Range: [-5, +13]
+
+BƯỚC 4 — Tích hợp vào CalcBaseScore() (RP_Scoring.mqh):
+
+  // SAU Volume Delta, TRƯỚC return:
+  score += CalcZonePrecisionScore(rp_index);  // P24d: [-5, +13]
+
+IMPACT trên scoring:
+  Base Score max: 100 → vẫn 100 (MathMin cap)
+  Nhưng zone chính xác sẽ đạt 100 dễ hơn:
+    Tight zone (+5) + Wick filter (+3) + Retest refined (+5) = +13 điểm
+    Zone rộng bị phạt -5 → khó đạt Premium
+```
+
+---
+
+## PROMPT 25: Test Quality & Zone Absorption (Sửa RP_Defines.mqh + RP_Detection.mqh + RP_Scoring.mqh)
+
+```
+Nâng cao hiệu quả zone bằng 2 yếu tố: phân biệt chất lượng test, phát hiện zone bị ăn mòn.
+Sửa file: RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh
+Phụ thuộc: P24 (Zone Precision) — mở rộng test logic hiện tại
+
+=== P25a: TEST QUALITY — PHÂN BIỆT BODY REJECTION vs WICK TOUCH ===
+
+MỤC ĐÍCH: Hiện tại mọi test đều đếm ngang nhau (test_count++).
+Nhưng body rejection (close trong zone rồi reject) khác xa wick touch (chỉ wick chạm).
+Body rejection = institutional engagement thật. Wick touch = có thể chỉ là noise.
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  int strong_test_count;    // Body rejection tests
+  int weak_test_count;      // Wick-only touch tests
+
+  Init():
+    strong_test_count = 0;
+    weak_test_count   = 0;
+
+BƯỚC 2 — Classify test trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+  // Trong block if(!is_breakout), SAU test_count++:
+
+  bool is_body_test = false;
+  double open_1 = iOpen(_Symbol, PERIOD_CURRENT, 1);
+
+  if(rp.rp_type == RP_SUPPORT):
+    // Body test: body bottom (min of open,close) entered zone
+    double body_low = MathMin(open_1, close_1);
+    is_body_test = (body_low <= rp.zone_high && body_low >= rp.zone_low);
+  else:
+    // Body test: body top (max of open,close) entered zone
+    double body_high = MathMax(open_1, close_1);
+    is_body_test = (body_high >= rp.zone_low && body_high <= rp.zone_high);
+
+  if(is_body_test): rp.strong_test_count++;
+  else:             rp.weak_test_count++;
+
+BƯỚC 3 — THAY THẾ test_count scoring trong CalcBaseScore() (RP_Scoring.mqh):
+
+  // THAY THẾ switch(rp.test_count) BẰNG:
+  double CalcTestQualityScore(int rp_index):
+    double weighted = strong_test_count + weak_test_count * 0.3;
+
+    if(weighted < 0.1):  return 0.0;
+    if(weighted < 1.1):  return 5.0;
+    if(weighted < 2.1):  return 12.0;
+    if(weighted < 3.1):  return 20.0;
+
+    // 3+ tests: bonus cho strong-dominant
+    double strong_ratio = strong_test_count / test_count;
+    if(strong_ratio >= 0.7): return 25.0;  // +5 bonus vs max cũ 20
+
+    return MathMax(20.0 - (weighted - 3.0) * 5.0, 5.0);
+
+IMPACT:
+  - Max cũ: 20đ → Max mới: 25đ (zone có 3+ body rejections)
+  - 3 wick touches: weighted = 0.9 → chỉ 5đ (trước đây 20đ!)
+  - 2 body + 1 wick: weighted = 2.3 → 12đ (hợp lý)
+
+VÍ DỤ:
+  Zone A: 3 body rejections → 25đ (Premium quality test)
+  Zone B: 3 wick touches → 5đ (chỉ noise, không uy tín)
+  Zone C: 2 body + 2 wick → weighted=2.6 → 12đ (trung bình)
+
+
+=== P25b: ZONE ABSORPTION — PHÁT HIỆN ZONE BỊ ĂN MÒN ===
+
+MỤC ĐÍCH: Volume pattern qua các lần test cho biết zone đang mạnh hay đang bị phá:
+  - Volume GIẢM dần → seller/buyer đang cạn → zone HỮU HIỆU
+  - Volume TĂNG dần → institutional accumulation ngược chiều → zone SẮP BỊ PHÁ
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  double test_volumes[4];   // Tick volume tại 4 lần test gần nhất (circular buffer)
+  int    test_vol_index;    // Next write index
+
+  Init():
+    ArrayInitialize(test_volumes, 0.0);
+    test_vol_index = 0;
+
+BƯỚC 2 — Track volume trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+  // Trong block if(!is_breakout), SAU test quality logic:
+
+  long test_tick_vol = iVolume(_Symbol, PERIOD_CURRENT, 1);
+  rp.test_volumes[rp.test_vol_index % 4] = (double)test_tick_vol;
+  rp.test_vol_index++;
+
+BƯỚC 3 — CalcAbsorptionAdj() trong RP_Scoring.mqh:
+  // ĐẶT vào CalcFinalScore (context adjustment, không phải base)
+
+  double CalcAbsorptionAdj(int rp_index):
+    int tests_recorded = MathMin(rp.test_vol_index, 4);
+    if(tests_recorded < 2): return 0.0;
+
+    // So sánh volume nửa đầu vs nửa sau
+    double avg_early, avg_late;
+    // (đọc circular buffer theo thứ tự thời gian)
+    double change = (avg_late - avg_early) / avg_early;
+
+    if(change > 0.50): return -10.0;  // Volume tăng mạnh → zone bị absorb
+    if(change > 0.20): return -5.0;   // Volume tăng vừa → cảnh báo
+    if(change < -0.30): return +5.0;  // Volume giảm → zone đang hold
+
+    return 0.0;
+
+BƯỚC 4 — Tích hợp vào CalcFinalScore():
+  // THÊM vào adjusted sum:
+  + CalcAbsorptionAdj(rp_index)   // P25b: [-10, +5]
+
+LƯU Ý:
+- Circular buffer [4] giữ memory footprint nhỏ
+- Chỉ cần 2 tests để bắt đầu so sánh
+- Anti-repainting: dùng iVolume(bar=1) — bar đã đóng
+- Volume ở đây là tick volume (proxy cho real volume trên Forex)
+- Absorption detection là CẢNH BÁO SỚM — zone có thể vẫn hold 1-2 test nữa
+```
+
+---
+
+## PROMPT 26: Zone Data Logger (Tạo RP_Logger.mqh + Sửa RP_Detection.mqh + RP_Main.mq5)
+
+```
+Tạo hệ thống logging CSV để thu thập dữ liệu zone thực tế, phục vụ phân tích
+và tinh chỉnh scoring weights.
+
+Tạo file: RP_Logger.mqh
+Sửa file: RP_Detection.mqh, RP_Main.mq5
+Phụ thuộc: P24, P25 (cần has_wick_filter, strong/weak_test_count)
+
+=== KIẾN TRÚC ===
+
+3 file CSV output (trong MQL5/Files/RP_Logs/):
+
+1. {SYMBOL}_{TF}_zones.csv — Log mỗi zone được tạo
+   Columns: timestamp, rp_id, type, price, zone_high, zone_low,
+            zone_width_pips, atr14_pips, width_atr_ratio,
+            pattern, reaction_pips, volume_ratio,
+            session, regime, has_wick_filter,
+            base_score, final_score, level
+
+2. {SYMBOL}_{TF}_tests.csv — Log mỗi lần zone bị test
+   Columns: timestamp, rp_id, test_number, is_body_test,
+            test_volume, volume_vs_ma20,
+            zone_width_before, zone_width_after,
+            reaction_bar_low, reaction_bar_high, reaction_bar_close,
+            score_at_test
+
+3. {SYMBOL}_{TF}_outcomes.csv — Kết quả phản ứng sau N bars
+   Columns: timestamp, rp_id, type, score_at_test,
+            test_count, max_favorable_pips, max_adverse_pips,
+            bars_to_max_favorable, outcome,
+            session, regime, pattern,
+            has_wick_filter, strong_tests, weak_tests,
+            zone_width_pips, width_atr_ratio
+
+=== OUTCOME MEASUREMENT ===
+
+Sau mỗi test event, hệ thống theo dõi N bars tiếp theo (default 20):
+  - max_favorable_pips: di chuyển tối đa theo hướng mong đợi
+  - max_adverse_pips: di chuyển ngược hướng
+  - outcome classification:
+    STRONG_REACT:  favorable >= 1.0x ATR (zone rất hiệu quả)
+    WEAK_REACT:    favorable >= 0.5x ATR (zone có hiệu quả)
+    FAILED:        adverse >= 0.5x ATR (zone thất bại)
+    NEUTRAL:       không có di chuyển đáng kể
+    BROKEN:        zone bị phá (breakout confirmed)
+
+=== TÍCH HỢP ===
+
+RP_Logger.mqh:
+  - InitLogger(): mở 3 file CSV + viết headers
+  - DeinitLogger(): flush + đóng files
+  - LogZoneCreated(rp): ghi khi CreateRP() hoàn tất
+  - LogZoneTest(rp, ...): ghi khi test event xảy ra
+  - LogZoneBroken(rp): ghi khi breakout confirmed
+  - RegisterPendingOutcome(rp): queue để đo reaction
+  - CheckPendingOutcomes(bars): đo reaction sau N bars
+
+RP_Detection.mqh:
+  - CreateRP() → LogZoneCreated(rp) sau khi store
+  - CheckBreakoutsAndRetests():
+    - if(!is_breakout) → LogZoneTest() sau refinement
+    - else → LogZoneBroken() trước HandleBreakout()
+
+RP_Main.mq5:
+  - Input: Enable_Logger (default false), Outcome_Measure_Bars (default 20)
+  - OnInit(): g_use_logger = Enable_Logger; InitLogger()
+  - OnDeinit(): DeinitLogger()
+  - OnCalculate(): CheckPendingOutcomes(Outcome_Measure_Bars) sau scoring
+
+=== CÁCH SỬ DỤNG ===
+
+PHASE 1 — Thu thập data:
+  1. Bật Enable_Logger = true trên GBPUSD H4 + CADJPY H4
+  2. Chạy trên demo hoặc Strategy Tester (visual mode)
+  3. Thu thập ít nhất 500+ zone events (2-4 tuần live hoặc 6 tháng backtest)
+
+PHASE 2 — Phân tích (Excel/Python):
+  1. Mở outcomes.csv → tính win rate theo:
+     - Score range (0-40, 40-60, 60-80, 80-100, 100+)
+     - Session (London vs Asian vs Overlap)
+     - Pattern (Pinbar vs Engulfing vs None)
+     - Zone width ratio (< 0.3 ATR vs > 0.8 ATR)
+     - Test quality (strong% vs weak%)
+  2. Tìm yếu tố nào THỰC SỰ tương quan với STRONG_REACT
+  3. Tìm yếu tố nào KHÔNG ảnh hưởng (có thể giảm weight)
+
+PHASE 3 — Tinh chỉnh scoring:
+  1. Điều chỉnh weights trong CalcBaseScore dựa trên correlation
+  2. Điều chỉnh module adjustments trong CalcFinalScore
+  3. Chạy lại PHASE 1 → so sánh win rate trước/sau
+
+LƯU Ý:
+- Logger dùng FILE_COMMON → file nằm trong MQL5/Files/ chung
+- Bật/tắt bằng input, mặc định OFF → không ảnh hưởng production
+- FileWrite chỉ gọi khi có event (tạo/test/break) → không ảnh hưởng hiệu năng
+- Pending outcomes dùng fixed array [50] → memory footprint nhỏ
+- Anti-repainting: tất cả data đều từ bar[1] — consistent với indicator logic
+```
+
+---
+
 ## THỨ TỰ THỰC THI TÓM TẮT
 
 ```
@@ -2175,6 +3381,21 @@ PHASE 5 — UI (cần Phase 4):
 
 PHASE 6 — Integration:
   P17: RP_Main.mq5          ← LÀM CUỐI CÙNG, tổng hợp tất cả
+
+PHASE 7 — Reliability + Performance (cần Phase 6):
+  P18: Rebalance Scoring Weights        (sửa RP_Scoring.mqh, RP_Detection.mqh)
+  P19: Fibonacci Swing-to-Swing         (sửa RP_Defines.mqh, RP_Utils.mqh, RP_Scoring.mqh)
+  P20: Multi-TF Trend Alignment         (sửa RP_Confluence.mqh, RP_Scoring.mqh, RP_EntrySetup.mqh, RP_Main.mq5)
+  P21: Dynamic Zone Width               (sửa RP_Detection.mqh)
+  P22: Pair-Adaptive Parameters         (sửa RP_Utils.mqh, RP_Session.mqh, RP_Main.mq5)
+  P23: Performance Optimization          (sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
+
+  P24: Zone Precision Enhancement    (sửa RP_Defines.mqh, RP_Detection.mqh)
+  P25: Test Quality & Zone Absorption (sửa RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh)
+  P26: Zone Data Logger              (tạo RP_Logger.mqh, sửa RP_Detection.mqh, RP_Main.mq5)
+
+  P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26
+  P26 chạy cuối cùng — logging cần tất cả features hoạt động đúng trước
 ```
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.

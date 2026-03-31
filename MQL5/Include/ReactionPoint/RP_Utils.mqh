@@ -123,6 +123,14 @@ double g_spread_block_multiplier = 3.0;
 bool   g_use_market_structure    = true;
 int    g_structure_lookback_bars = 50;
 
+// Clean Chart Mode
+bool   g_clean_chart_mode           = true;
+
+// Pair detection (P22)
+bool   g_is_jpy_pair   = false;
+bool   g_is_gbp_pair   = false;
+bool   g_is_cross_pair = false;
+
 // Alerts
 bool   g_alert_only_active_sessions = true;
 
@@ -153,12 +161,21 @@ double g_cached_atr14_ma50    = 0.0;
 double g_cached_volume_ma20   = 0.0;
 int    g_cached_bar_index     = -1;
 
-// Fibo cache
+// Fibo cache (backward compatible — populated from best fibo leg)
 double g_cached_fibo_high     = 0.0;
 double g_cached_fibo_low      = 0.0;
+double g_cached_fibo_786      = 0.0;
 double g_cached_fibo_618      = 0.0;
 double g_cached_fibo_500      = 0.0;
 double g_cached_fibo_382      = 0.0;
+
+// Fibo swing-to-swing legs (Phase 7 — P19)
+SFiboLeg g_fibo_legs[];       // ArrayResize(MAX_FIBO_LEGS) in OnInit
+int      g_fibo_leg_count     = 0;
+
+// HTF trend alignment (Phase 7 — P20)
+SHTFTrend g_htf_trends[3];    // [0]=current TF, [1]=HTF_1, [2]=HTF_2
+bool      g_use_trend_alignment = true;
 
 // Dirty flags
 bool   g_rp_dirty[];
@@ -291,7 +308,9 @@ double GetATR14(int shift = 0)
 }
 
 //+------------------------------------------------------------------+
-//| UpdateFiboCache — find swing H/L and calc fib levels once/bar    |
+//| UpdateFiboCache — Swing-to-Swing Fibonacci Engine (P19)          |
+//| Finds completed swing legs and calculates fib retracement levels |
+//| Only legs >= 2*ATR where price is actively retracing are valid   |
 //+------------------------------------------------------------------+
 void UpdateFiboCache()
 {
@@ -299,44 +318,174 @@ void UpdateFiboCache()
 
    int bars_avail = Bars(_Symbol, PERIOD_CURRENT);
    int lookback = MathMin(g_fibo_lookback_bars, bars_avail - 1);
-   if(lookback < 5) return;
+   if(lookback < 10) return;
 
-   double highest = -DBL_MAX;
-   double lowest  = DBL_MAX;
+   int N = MathMin(g_swing_lookback, 3); // Smaller N for faster fibo swing detection
+   if(lookback < N * 2 + 3) return;
 
-   for(int i = 1; i <= lookback; i++)
+   //--- STEP 1: Batch copy price data ONCE (replaces 540+ iHigh/iLow calls)
+   double highs[], lows[];
+   int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, lookback + 1, highs);
+   int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, lookback + 1, lows);
+   if(copied_h <= 0 || copied_l <= 0) return;
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows, true);
+
+   //--- Find swing points in bars[1..lookback] (anti-repainting)
+   double swing_prices[];
+   int    swing_bars[];
+   int    swing_types[];   // 1=High, -1=Low
+   int    swing_count = 0;
+
+   ArrayResize(swing_prices, MAX_FIBO_SWINGS);
+   ArrayResize(swing_bars,   MAX_FIBO_SWINGS);
+   ArrayResize(swing_types,  MAX_FIBO_SWINGS);
+
+   int scan_limit = MathMin(lookback - N, copied_h - 1);
+
+   for(int i = N + 1; i <= scan_limit && swing_count < MAX_FIBO_SWINGS; i++)
    {
-      double h = iHigh(_Symbol, PERIOD_CURRENT, i);
-      double l = iLow(_Symbol, PERIOD_CURRENT, i);
-      if(h > highest) highest = h;
-      if(l < lowest)  lowest  = l;
+      //--- Check swing high (use strict < to allow flat-topped swings)
+      bool is_high = true;
+      for(int j = 1; j <= N; j++)
+      {
+         if(highs[i] < highs[i - j] || highs[i] < highs[i + j])
+         {
+            is_high = false;
+            break;
+         }
+      }
+
+      //--- Check swing low (use strict > to allow flat-bottomed swings)
+      bool is_low = true;
+      for(int j = 1; j <= N; j++)
+      {
+         if(lows[i] > lows[i - j] || lows[i] > lows[i + j])
+         {
+            is_low = false;
+            break;
+         }
+      }
+
+      if(is_high)
+      {
+         swing_prices[swing_count] = highs[i];
+         swing_bars[swing_count]   = i;
+         swing_types[swing_count]  = 1;
+         swing_count++;
+      }
+      else if(is_low)
+      {
+         swing_prices[swing_count] = lows[i];
+         swing_bars[swing_count]   = i;
+         swing_types[swing_count]  = -1;
+         swing_count++;
+      }
    }
 
-   g_cached_fibo_high = highest;
-   g_cached_fibo_low  = lowest;
-
-   double range = highest - lowest;
-   if(range <= 0.0)
+   if(swing_count < 2)
    {
-      g_cached_fibo_618 = 0.0;
-      g_cached_fibo_500 = 0.0;
-      g_cached_fibo_382 = 0.0;
+      g_fibo_leg_count   = 0;
+      g_cached_fibo_786  = 0.0;
+      g_cached_fibo_618  = 0.0;
+      g_cached_fibo_500  = 0.0;
+      g_cached_fibo_382  = 0.0;
+      g_cached_fibo_high = 0.0;
+      g_cached_fibo_low  = 0.0;
       return;
    }
 
-   if(g_current_trend == TREND_UP)
+   //--- STEP 2: Build fibo legs from adjacent swing pairs
+   g_fibo_leg_count = 0;
+   double current = iClose(_Symbol, PERIOD_CURRENT, 1); // Anti-repainting: bar[1]
+
+   for(int i = 0; i < swing_count - 1 && g_fibo_leg_count < MAX_FIBO_LEGS; i++)
    {
-      // Retracement from low to high (buy dip)
-      g_cached_fibo_618 = highest - range * 0.618;
-      g_cached_fibo_500 = highest - range * 0.500;
-      g_cached_fibo_382 = highest - range * 0.382;
+      //--- Only pair different swing types (High+Low or Low+High)
+      if(swing_types[i] == swing_types[i + 1]) continue;
+
+      // swing_bars sorted ascending by bar index (nearest first)
+      // i+1 has larger bar index = further back in time = older swing = leg start
+      // i   has smaller bar index = more recent = newer swing = leg end
+      double a_price = swing_prices[i + 1]; // Older swing (further back) = leg start
+      double b_price = swing_prices[i];     // Newer swing (more recent) = leg end
+      int    a_bar   = swing_bars[i + 1];
+      int    b_bar   = swing_bars[i];
+
+      double leg_size = MathAbs(b_price - a_price);
+
+      //--- FILTER: Leg must be >= 2x ATR to be meaningful
+      double min_leg = g_cached_atr14 * 2.0;
+      if(min_leg <= 0.0) min_leg = PipsToPrice(20); // Fallback
+      if(leg_size < min_leg) continue;
+
+      //--- FILTER: Price must be RETRACING, not extending
+      bool is_bullish = (b_price > a_price); // Low→High leg
+
+      if(is_bullish)
+      {
+         // Bullish leg: price must be below swing B (retracing down)
+         if(current >= b_price) continue; // Extending, not retracing
+         if(current <= a_price) continue; // Broken past swing A, fibo invalid
+      }
+      else
+      {
+         // Bearish leg: price must be above swing B (retracing up)
+         if(current <= b_price) continue; // Extending
+         if(current >= a_price) continue; // Broken past swing A
+      }
+
+      //--- Build fibo leg
+      SFiboLeg leg;
+      leg.Init();
+      leg.swing_a_price  = a_price;
+      leg.swing_b_price  = b_price;
+      leg.swing_a_bar    = a_bar;
+      leg.swing_b_bar    = b_bar;
+      leg.is_bullish_leg = is_bullish;
+      leg.is_valid       = true;
+
+      double range = MathAbs(b_price - a_price);
+
+      if(is_bullish)
+      {
+         // Retracement from High down: buy-the-dip levels
+         leg.fibo_382 = b_price - range * 0.382;
+         leg.fibo_500 = b_price - range * 0.500;
+         leg.fibo_618 = b_price - range * 0.618;
+         leg.fibo_786 = b_price - range * 0.786;
+      }
+      else
+      {
+         // Retracement from Low up: sell-the-rally levels
+         leg.fibo_382 = b_price + range * 0.382;
+         leg.fibo_500 = b_price + range * 0.500;
+         leg.fibo_618 = b_price + range * 0.618;
+         leg.fibo_786 = b_price + range * 0.786;
+      }
+
+      g_fibo_legs[g_fibo_leg_count] = leg;
+      g_fibo_leg_count++;
+   }
+
+   //--- STEP 3: Update backward-compatible cache from best leg (leg[0])
+   if(g_fibo_leg_count > 0)
+   {
+      g_cached_fibo_786  = g_fibo_legs[0].fibo_786;
+      g_cached_fibo_618  = g_fibo_legs[0].fibo_618;
+      g_cached_fibo_500  = g_fibo_legs[0].fibo_500;
+      g_cached_fibo_382  = g_fibo_legs[0].fibo_382;
+      g_cached_fibo_high = MathMax(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
+      g_cached_fibo_low  = MathMin(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
    }
    else
    {
-      // Retracement from high to low, or default
-      g_cached_fibo_618 = lowest + range * 0.618;
-      g_cached_fibo_500 = lowest + range * 0.500;
-      g_cached_fibo_382 = lowest + range * 0.382;
+      g_cached_fibo_786  = 0.0;
+      g_cached_fibo_618  = 0.0;
+      g_cached_fibo_500  = 0.0;
+      g_cached_fibo_382  = 0.0;
+      g_cached_fibo_high = 0.0;
+      g_cached_fibo_low  = 0.0;
    }
 }
 
@@ -618,6 +767,76 @@ color BlendColor(color fg, color bg, int alpha_pct)
 color GetChartBackground()
 {
    return (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
+}
+
+//+------------------------------------------------------------------+
+//| DetectPairType — identify pair characteristics from symbol (P22)  |
+//+------------------------------------------------------------------+
+void DetectPairType()
+{
+   string symbol = _Symbol;
+
+   g_is_jpy_pair = (StringFind(symbol, "JPY") >= 0);
+   g_is_gbp_pair = (StringFind(symbol, "GBP") >= 0);
+
+   g_is_cross_pair = !(
+      StringFind(symbol, "EURUSD") >= 0 || StringFind(symbol, "GBPUSD") >= 0 ||
+      StringFind(symbol, "USDJPY") >= 0 || StringFind(symbol, "USDCHF") >= 0 ||
+      StringFind(symbol, "AUDUSD") >= 0 || StringFind(symbol, "USDCAD") >= 0 ||
+      StringFind(symbol, "NZDUSD") >= 0
+   );
+
+   Print("RP: Pair=", symbol,
+         " | JPY=", g_is_jpy_pair,
+         " | GBP=", g_is_gbp_pair,
+         " | Cross=", g_is_cross_pair);
+}
+
+//+------------------------------------------------------------------+
+//| ApplyVolatilityScaling — scale params by ATR ratio (P22)          |
+//| Called ONCE after first UpdateBarCache when ATR is available       |
+//+------------------------------------------------------------------+
+void ApplyVolatilityScaling()
+{
+   if(g_cached_atr14 <= 0.0) return;
+
+   //--- ATR baseline per TF (typical EURUSD values)
+   double atr_baseline;
+   ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
+
+   if(tf <= PERIOD_M30)      atr_baseline = PipsToPrice(15);
+   else if(tf <= PERIOD_H1)  atr_baseline = PipsToPrice(25);
+   else if(tf <= PERIOD_H4)  atr_baseline = PipsToPrice(50);
+   else                      atr_baseline = PipsToPrice(100);
+
+   if(atr_baseline <= 0.0) atr_baseline = PipsToPrice(25);
+
+   double ratio = g_cached_atr14 / atr_baseline;
+   ratio = MathMax(0.7, MathMin(ratio, 2.5)); // Clamp
+
+   //--- Scale distance parameters
+   g_min_rp_distance_pips   = (int)MathRound(g_min_rp_distance_pips * ratio);
+   g_min_reaction_move_pips = (int)MathRound(g_min_reaction_move_pips * ratio);
+   g_breakout_confirm_pips  = (int)MathRound(g_breakout_confirm_pips * ratio);
+   g_confluence_merge_pips  = (int)MathRound(g_confluence_merge_pips * ratio);
+   g_fibo_tolerance_pips    = (int)MathRound(g_fibo_tolerance_pips * ratio);
+   g_proximity_alert_pips   = (int)MathRound(g_proximity_alert_pips * ratio);
+   g_reset_alert_pips       = (int)MathRound(g_reset_alert_pips * ratio);
+   g_sl_buffer_pips         = (int)MathRound(g_sl_buffer_pips * ratio);
+   g_zone_width_pips        = (int)MathMax(MathRound(g_zone_width_pips * ratio), 3);   // P22 fix: scale zone min width
+   g_min_candle_size_pips   = (int)MathMax(MathRound(g_min_candle_size_pips * ratio), 2); // P22 fix: scale candle filter
+
+   //--- Cross pairs: relax spread filter
+   if(g_is_cross_pair)
+   {
+      if(g_spread_alert_multiplier < 2.5) g_spread_alert_multiplier = 2.5;
+      if(g_spread_block_multiplier < 4.0) g_spread_block_multiplier = 4.0;
+   }
+
+   Print("RP: ATR ratio=", DoubleToString(ratio, 2),
+         " | MinDist=", g_min_rp_distance_pips,
+         " | BreakConf=", g_breakout_confirm_pips,
+         " | MergePips=", g_confluence_merge_pips);
 }
 
 #endif // RP_UTILS_MQH

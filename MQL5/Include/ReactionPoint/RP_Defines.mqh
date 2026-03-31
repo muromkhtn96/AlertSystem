@@ -33,6 +33,8 @@ enum ENUM_STRUCTURE_STATE   { STRUCTURE_BULLISH, STRUCTURE_BEARISH, STRUCTURE_NO
 #define MAX_HTF_RETRIES    3
 #define OBJECT_PREFIX      "RP_"
 #define SCORE_CAP          150.0
+#define MAX_FIBO_LEGS      3
+#define MAX_FIBO_SWINGS    6
 
 //+------------------------------------------------------------------+
 //| Anti-repainting shift guard                                      |
@@ -53,6 +55,8 @@ struct SReactionPoint
    double           price;
    double           zone_high;
    double           zone_low;
+   double           zone_high_original;   // P24c: original zone edge before retest refinement
+   double           zone_low_original;    // P24c: original zone edge before retest refinement
    datetime         time_formed;
    datetime         time_last_tested;
    int              bar_formed;
@@ -73,6 +77,11 @@ struct SReactionPoint
    double           display_opacity;
    int              day_of_week_formed;
    bool             has_liquidity_sweep;
+   bool             has_wick_filter;       // P24d: true if wick ratio filter trimmed zone
+   int              strong_test_count;     // P25a: body rejection tests (high quality)
+   int              weak_test_count;       // P25a: wick-only touch tests (low quality)
+   double           test_volumes[4];       // P25b: tick volume at last 4 tests (circular)
+   int              test_vol_index;        // P25b: next write index for test_volumes
 
    void Init()
    {
@@ -85,6 +94,8 @@ struct SReactionPoint
       price                = 0.0;
       zone_high            = 0.0;
       zone_low             = 0.0;
+      zone_high_original   = 0.0;
+      zone_low_original    = 0.0;
       time_formed          = 0;
       time_last_tested     = 0;
       bar_formed           = 0;
@@ -105,6 +116,11 @@ struct SReactionPoint
       display_opacity      = 100.0;
       day_of_week_formed   = 0;
       has_liquidity_sweep  = false;
+      has_wick_filter      = false;
+      strong_test_count    = 0;
+      weak_test_count      = 0;
+      ArrayInitialize(test_volumes, 0.0);
+      test_vol_index       = 0;
    }
 };
 
@@ -164,6 +180,7 @@ struct SEntrySetup
    bool             is_active;
    bool             is_invalidated;
    bool             is_triggered;
+   bool             is_preferred;
 
    void Init()
    {
@@ -183,6 +200,7 @@ struct SEntrySetup
       is_active      = false;
       is_invalidated = false;
       is_triggered   = false;
+      is_preferred   = false;
    }
 };
 
@@ -212,6 +230,56 @@ struct SRPStats
    {
       ZeroMemory(this);
       tracking_start = TimeCurrent();
+   }
+};
+
+//+------------------------------------------------------------------+
+//| SFiboLeg — Fibonacci swing-to-swing leg                         |
+//+------------------------------------------------------------------+
+struct SFiboLeg
+{
+   double    swing_a_price;    // Start of leg (older swing)
+   double    swing_b_price;    // End of leg (newer swing)
+   int       swing_a_bar;      // Bar index of swing A
+   int       swing_b_bar;      // Bar index of swing B
+   bool      is_bullish_leg;   // true = Low→High, false = High→Low
+   bool      is_valid;         // true if leg >= 2*ATR and confirmed
+   double    fibo_382;         // 38.2% retracement level
+   double    fibo_500;         // 50.0% retracement level
+   double    fibo_618;         // 61.8% retracement level
+   double    fibo_786;         // 78.6% retracement level (institutional)
+
+   void Init()
+   {
+      swing_a_price = 0.0;
+      swing_b_price = 0.0;
+      swing_a_bar   = 0;
+      swing_b_bar   = 0;
+      is_bullish_leg= false;
+      is_valid      = false;
+      fibo_382      = 0.0;
+      fibo_500      = 0.0;
+      fibo_618      = 0.0;
+      fibo_786      = 0.0;
+   }
+};
+
+//+------------------------------------------------------------------+
+//| SHTFTrend — Higher timeframe trend cache                         |
+//+------------------------------------------------------------------+
+struct SHTFTrend
+{
+   ENUM_TIMEFRAMES  tf;
+   ENUM_TREND_DIR   trend;
+   bool             is_valid;
+   datetime         last_updated;
+
+   void Init()
+   {
+      tf           = PERIOD_CURRENT;
+      trend        = TREND_NONE;
+      is_valid     = false;
+      last_updated = 0;
    }
 };
 
