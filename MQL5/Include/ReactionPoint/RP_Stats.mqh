@@ -22,7 +22,7 @@ void InitStats()
 void OnRPFormed(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    g_stats.total_formed++;
 
@@ -60,7 +60,7 @@ void OnRPFormed(int rp_index)
 void OnRPReacted(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    g_stats.total_reacted++;
 
@@ -121,7 +121,7 @@ void UpdateStats()
    for(int i = 0; i < g_rp_count; i++)
    {
       if(!g_rp_array[i].is_active) continue;
-      SReactionPoint &rp = g_rp_array[i];
+      SReactionPoint rp = g_rp_array[i];
 
       //--- Check if bar[1] touches zone
       bool touches_zone = (low_1 <= rp.zone_high && high_1 >= rp.zone_low);

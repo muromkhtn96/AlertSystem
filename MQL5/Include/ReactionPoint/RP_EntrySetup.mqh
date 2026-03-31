@@ -171,7 +171,7 @@ double FindNearestSorted(double from_price, ENUM_RP_TYPE direction, int skip_cou
 void CreateEntrySetup(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double entry, sl;
 
@@ -359,7 +359,7 @@ void CheckEntryConditions()
       if(!g_rp_array[i].is_active) continue;
       if(g_rp_array[i].final_score < g_min_score_to_show) continue;
 
-      SReactionPoint &rp = g_rp_array[i];
+      SReactionPoint rp = g_rp_array[i];
 
       //--- a) Price (bar[1] close) must be in zone
       if(close_1 < rp.zone_low || close_1 > rp.zone_high)
@@ -420,13 +420,14 @@ void UpdateSetups()
    {
       if(!g_setup_array[i].is_active) continue;
 
-      SEntrySetup &setup = g_setup_array[i];
+      SEntrySetup setup = g_setup_array[i];
 
       //--- a) Age check — expire if too old
       int age = current_bar - setup.bar_created;
       if(age > g_max_setup_age_bars)
       {
          setup.is_active = false;
+         g_setup_array[i] = setup;
          continue;
       }
 
@@ -446,6 +447,7 @@ void UpdateSetups()
                setup.is_triggered = true;
          }
       }
+      g_setup_array[i] = setup;
    }
 }
 
@@ -465,7 +467,7 @@ void UpdateSetupInvalidation()
       if(!g_setup_array[i].is_active) continue;
       if(g_setup_array[i].is_invalidated) continue;
 
-      SEntrySetup &setup = g_setup_array[i];
+      SEntrySetup setup = g_setup_array[i];
 
       //--- SL invalidation: if price hits SL level, invalidate
       if(setup.direction == RP_SUPPORT)
@@ -486,6 +488,7 @@ void UpdateSetupInvalidation()
             setup.is_active = false;
          }
       }
+      g_setup_array[i] = setup;
    }
 }
 

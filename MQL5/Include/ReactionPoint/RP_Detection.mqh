@@ -411,10 +411,11 @@ void DetectSwingPoints(int bars_to_scan)
 //+------------------------------------------------------------------+
 void HandleBreakout(int rp_index, int current_bar)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    rp.bar_last_tested  = current_bar;
    rp.time_last_tested = TimeCurrent();
+   g_rp_array[rp_index] = rp;
    g_rp_dirty[rp_index] = true;
 }
 
@@ -424,7 +425,7 @@ void HandleBreakout(int rp_index, int current_bar)
 void CheckRoleReversalRetest(int rp_index, int current_bar,
                              double close_1, double high_1, double low_1)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(rp.is_role_reversed) return;
 
    // Check if price was beyond the RP within retest window (breakout occurred)
@@ -482,6 +483,7 @@ void CheckRoleReversalRetest(int rp_index, int current_bar,
       g_confluence_needs_update = true;
    }
 
+   g_rp_array[rp_index] = rp;
    g_rp_dirty[rp_index] = true;
 }
 
@@ -490,7 +492,7 @@ void CheckRoleReversalRetest(int rp_index, int current_bar,
 //+------------------------------------------------------------------+
 void CheckGapBreakout(int rp_index, double close_1)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double close_2 = RP_Close(2);
    if(close_2 == 0.0) return;
@@ -545,7 +547,7 @@ void CheckBreakoutsAndRetests()
    {
       if(!g_rp_array[i].is_active) continue;
 
-      SReactionPoint &rp = g_rp_array[i];
+      SReactionPoint rp = g_rp_array[i];
 
       // Check test (price enters zone)
       bool in_zone = (low_1 <= rp.zone_high && high_1 >= rp.zone_low);
@@ -629,6 +631,7 @@ void CheckBreakoutsAndRetests()
                         rp.zone_high - rp.zone_low,
                         low_1, high_1, close_1, test_tick_vol);
 
+            g_rp_array[i] = rp;
             g_rp_dirty[i] = true;
          }
          else

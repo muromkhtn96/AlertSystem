@@ -92,7 +92,7 @@ double CalcVolumeScore(int bar_shift)
 double CalcVolumeDeltaBonus(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double open_f  = iOpen(_Symbol, PERIOD_CURRENT, rp.bar_formed);
    double close_f = iClose(_Symbol, PERIOD_CURRENT, rp.bar_formed);
@@ -141,7 +141,7 @@ double RoundNumberScore(double price)
 double CalcZonePrecisionScore(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double score = 0.0;
    double zone_width = rp.zone_high - rp.zone_low;
@@ -179,7 +179,7 @@ double CalcZonePrecisionScore(int rp_index)
 double CalcTestQualityScore(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    // Weighted test count: strong = 1.0, weak = 0.3
    double weighted = (double)rp.strong_test_count + (double)rp.weak_test_count * 0.3;
@@ -210,7 +210,7 @@ double CalcTestQualityScore(int rp_index)
 double CalcAbsorptionAdj(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    // Need at least 2 tests to compare volume trend
    int tests_recorded = MathMin(rp.test_vol_index, 4);
@@ -262,7 +262,7 @@ double CalcAbsorptionAdj(int rp_index)
 double CalcBaseScore(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double score = 0.0;
 
@@ -311,7 +311,7 @@ double CalcBaseScore(int rp_index)
 void CalcFinalScore(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    // Calculate base score
    rp.base_score = CalcBaseScore(rp_index);
@@ -336,6 +336,9 @@ void CalcFinalScore(int rp_index)
 
    // Classify level
    rp.rp_level = ClassifyRPLevel(rp.final_score);
+
+   // Write modified copy back to global array
+   g_rp_array[rp_index] = rp;
 }
 
 #endif // RP_SCORING_MQH

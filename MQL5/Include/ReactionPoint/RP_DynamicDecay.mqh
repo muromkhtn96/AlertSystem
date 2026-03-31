@@ -22,7 +22,7 @@ double CalcDecayPenalty(int rp_index)
    if(!g_use_dynamic_score) return 0.0;
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
 
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    int current_bar = Bars(_Symbol, PERIOD_CURRENT) - 1;
 
    int bars_since_formed = current_bar - rp.bar_formed;
@@ -48,6 +48,7 @@ double CalcDecayPenalty(int rp_index)
       rp.is_active = false;
       if(rp_index < ArraySize(g_rp_dirty))
          g_rp_dirty[rp_index] = true;
+      g_rp_array[rp_index] = rp;
    }
 
    return penalty;
@@ -63,7 +64,7 @@ double CalcRecentBonus(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
 
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    // Check bars 1-5 for confirmed reaction
    // (candle touches zone + closes in reaction direction + move >= min_move)

@@ -29,7 +29,7 @@ void SendRPAlert(int level, int rp_index, string message)
 //+------------------------------------------------------------------+
 bool CheckProximityAlert(int rp_index)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(rp.alert_sent[0]) return false;
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -66,7 +66,7 @@ bool CheckProximityAlert(int rp_index)
 //+------------------------------------------------------------------+
 bool CheckReactionAlert(int rp_index)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(rp.alert_sent[1]) return false;
 
    //--- Bar[1] close must be in zone
@@ -113,7 +113,7 @@ bool CheckReactionAlert(int rp_index)
 //+------------------------------------------------------------------+
 bool CheckRoleReversalAlert(int rp_index)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(rp.alert_sent[2]) return false;
    if(!rp.is_role_reversed) return false;
 
@@ -133,7 +133,7 @@ bool CheckRoleReversalAlert(int rp_index)
 //+------------------------------------------------------------------+
 bool CheckPremiumAlert(int rp_index)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(rp.alert_sent[3]) return false;
    if(rp.final_score < 110.0) return false;
    if(!rp.is_confluence) return false;
@@ -169,7 +169,7 @@ bool CheckPremiumAlert(int rp_index)
 //+------------------------------------------------------------------+
 void ResetAlertIfDistant(int rp_index)
 {
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double distance = MathAbs(bid - rp.price);
@@ -177,6 +177,7 @@ void ResetAlertIfDistant(int rp_index)
    if(PriceToPips(distance) >= g_reset_alert_pips)
    {
       ArrayInitialize(rp.alert_sent, false);
+      g_rp_array[rp_index] = rp;
    }
 }
 
@@ -190,7 +191,7 @@ void CheckAllAlerts()
    {
       if(!g_rp_array[i].is_active) continue;
 
-      SReactionPoint &rp = g_rp_array[i];
+      SReactionPoint rp = g_rp_array[i];
 
       //--- Reset alerts if price moved far away
       ResetAlertIfDistant(i);
