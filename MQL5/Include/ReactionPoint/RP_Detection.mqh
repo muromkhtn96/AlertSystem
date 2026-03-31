@@ -228,8 +228,43 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    rp.id                   = g_next_rp_id++;
    rp.rp_type              = rp_type;
    rp.price                = price;
-   rp.zone_high            = price + PipsToPrice(g_zone_width_pips / 2.0);
-   rp.zone_low             = price - PipsToPrice(g_zone_width_pips / 2.0);
+
+   //--- Dynamic zone width from actual candle at swing point (P21)
+   double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, bar_index);
+   double bar_close = iClose(_Symbol, PERIOD_CURRENT, bar_index);
+   double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, bar_index);
+   double bar_low   = iLow(_Symbol, PERIOD_CURRENT, bar_index);
+
+   if(rp_type == RP_SUPPORT)
+   {
+      rp.zone_low  = bar_low;
+      rp.zone_high = MathMax(bar_open, bar_close);
+   }
+   else // RP_RESISTANCE
+   {
+      rp.zone_high = bar_high;
+      rp.zone_low  = MathMin(bar_open, bar_close);
+   }
+
+   //--- Safety clamps: min = half of Zone_Width_Pips, max = 1.5x ATR
+   double zone_range = rp.zone_high - rp.zone_low;
+   double min_width  = PipsToPrice(g_zone_width_pips / 2.0);
+   double max_width  = (g_cached_atr14 > 0.0) ? g_cached_atr14 * 1.5 : PipsToPrice(30);
+
+   if(zone_range < min_width)
+   {
+      double center = (rp.zone_high + rp.zone_low) / 2.0;
+      rp.zone_high = center + min_width / 2.0;
+      rp.zone_low  = center - min_width / 2.0;
+   }
+
+   if(zone_range > max_width)
+   {
+      if(rp_type == RP_SUPPORT)
+         rp.zone_high = rp.zone_low + max_width;
+      else
+         rp.zone_low = rp.zone_high - max_width;
+   }
    rp.time_formed          = iTime(_Symbol, PERIOD_CURRENT, bar_index);
    rp.bar_formed           = bar_index;
    rp.source_tf            = Period();

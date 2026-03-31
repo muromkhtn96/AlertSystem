@@ -2560,6 +2560,106 @@ LƯU Ý:
 - Premium exception: score >=110 vẫn cho phép entry counter-trend
 ```
 
+## PROMPT 21: Dynamic Zone Width (Sửa RP_Detection.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Detection.mqh — Zone width dựa trên candle thực tế
+thay vì cố định g_zone_width_pips.
+
+MỤC ĐÍCH: Zone width cố định (VD: 4 pips mỗi bên) gây 2 vấn đề:
+- Candle rejection lớn (20 pips body) → zone 4 pips = quá hẹp → giá "miss" zone
+- Candle nhỏ (3 pips body) tại ranging → zone 4 pips = quá rộng → false signal
+Zone phải khớp kích thước thực tế của phản ứng giá tại swing point.
+
+=== CONCEPT ===
+
+Zone = vùng mà institutional money đã phản ứng, xác định bởi candle tại swing point:
+
+SUPPORT zone:
+  zone_low  = low của swing candle (đáy phản ứng)
+  zone_high = MathMax(open, close) của swing candle (body top)
+  → Zone bao trùm TOÀN BỘ body + lower wick = vùng mà buyer đã mua
+
+RESISTANCE zone:
+  zone_high = high của swing candle (đỉnh phản ứng)
+  zone_low  = MathMin(open, close) của swing candle (body bottom)
+  → Zone bao trùm TOÀN BỘ body + upper wick = vùng mà seller đã bán
+
+=== SAFETY CLAMPS ===
+
+Zone quá hẹp hoặc quá rộng đều không tốt:
+  double zone_range = zone_high - zone_low;
+  double min_width  = PipsToPrice(g_zone_width_pips / 2.0);  // Floor: nửa width cũ
+  double max_width  = g_cached_atr14 * 1.5;                  // Ceiling: 1.5x ATR
+
+  if(zone_range < min_width):
+    // Candle quá nhỏ → pad đều 2 bên bằng min_width
+    double center = (zone_high + zone_low) / 2.0;
+    zone_high = center + min_width / 2.0;
+    zone_low  = center - min_width / 2.0;
+
+  if(zone_range > max_width):
+    // Candle quá lớn (news spike) → clamp về max_width, giữ từ edge phản ứng
+    if(rp_type == RP_SUPPORT):
+      zone_high = zone_low + max_width;  // Giữ đáy, cắt trên
+    else:
+      zone_low = zone_high - max_width;  // Giữ đỉnh, cắt dưới
+
+=== SỬA CreateRP() ===
+
+void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
+              ENUM_CANDLE_PATTERN pattern, double reaction_pips):
+
+  // THAY THẾ 2 dòng cũ:
+  //   rp.zone_high = price + PipsToPrice(g_zone_width_pips / 2.0);
+  //   rp.zone_low  = price - PipsToPrice(g_zone_width_pips / 2.0);
+
+  // BẰNG:
+  double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_close = iClose(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, bar_index);
+  double bar_low   = iLow(_Symbol, PERIOD_CURRENT, bar_index);
+
+  if(rp_type == RP_SUPPORT):
+    rp.zone_low  = bar_low;
+    rp.zone_high = MathMax(bar_open, bar_close);  // Body top
+  else: // RP_RESISTANCE
+    rp.zone_high = bar_high;
+    rp.zone_low  = MathMin(bar_open, bar_close);  // Body bottom
+
+  // Safety clamps
+  double zone_range = rp.zone_high - rp.zone_low;
+  double min_width  = PipsToPrice(g_zone_width_pips / 2.0);
+  double max_width  = (g_cached_atr14 > 0) ? g_cached_atr14 * 1.5 : PipsToPrice(30);
+
+  if(zone_range < min_width):
+    double center = (rp.zone_high + rp.zone_low) / 2.0;
+    rp.zone_high = center + min_width / 2.0;
+    rp.zone_low  = center - min_width / 2.0;
+
+  if(zone_range > max_width):
+    if(rp_type == RP_SUPPORT):
+      rp.zone_high = rp.zone_low + max_width;
+    else:
+      rp.zone_low = rp.zone_high - max_width;
+
+  // rp.price giữ nguyên = swing point gốc (dùng cho scoring/distance calc)
+
+KHÔNG SỬA gì khác. Scoring, alerts, confluence vẫn dùng rp.price để tính khoảng cách.
+Zone_high/zone_low chỉ dùng cho:
+- Drawing (DrawRPZone)
+- Breakout check (close < zone_low hoặc close > zone_high)
+- Entry trigger (close trong zone)
+- Test count (giá chạm zone)
+
+LƯU Ý:
+- g_zone_width_pips giờ chỉ dùng làm FLOOR (minimum width), không phải fixed width
+- Anti-repainting: iOpen/iClose/iHigh/iLow tại bar_index (confirmed bar, không phải bar[0])
+- ATR clamp ngăn news spike tạo zone quá lớn (vô nghĩa)
+```
+
+---
+
 ## THỨ TỰ THỰC THI TÓM TẮT
 
 ```
