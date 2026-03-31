@@ -750,9 +750,9 @@ color BlendColor(color fg, color bg, int alpha_pct)
    if(alpha_pct >= 100) return fg;
    if(alpha_pct <= 0)   return bg;
 
-   int r = ((int)ColorGetRed(fg)   * alpha_pct + (int)ColorGetRed(bg)   * (100 - alpha_pct)) / 100;
-   int g = ((int)ColorGetGreen(fg) * alpha_pct + (int)ColorGetGreen(bg) * (100 - alpha_pct)) / 100;
-   int b = ((int)ColorGetBlue(fg)  * alpha_pct + (int)ColorGetBlue(bg)  * (100 - alpha_pct)) / 100;
+   int r = ((int)(fg & 0xFF)         * alpha_pct + (int)(bg & 0xFF)         * (100 - alpha_pct)) / 100;
+   int g = ((int)((fg >> 8) & 0xFF)  * alpha_pct + (int)((bg >> 8) & 0xFF)  * (100 - alpha_pct)) / 100;
+   int b = ((int)((fg >> 16) & 0xFF) * alpha_pct + (int)((bg >> 16) & 0xFF) * (100 - alpha_pct)) / 100;
 
    r = MathMax(0, MathMin(255, r));
    g = MathMax(0, MathMin(255, g));

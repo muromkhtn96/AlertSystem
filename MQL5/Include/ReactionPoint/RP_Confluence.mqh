@@ -362,7 +362,7 @@ void ApplyConfluenceScoring()
 
    for(int z = 0; z < g_confluence_count; z++)
    {
-      SConfluenceZone &zone = g_confluence_array[z];
+      SConfluenceZone zone = g_confluence_array[z];
       if(zone.rp_count <= 0) continue;
 
       //--- Find RP with highest score in zone
@@ -395,6 +395,7 @@ void ApplyConfluenceScoring()
 
       //--- Update zone final_score
       zone.final_score = g_rp_array[best_idx].final_score;
+      g_confluence_array[z] = zone;
    }
 }
 
@@ -406,7 +407,7 @@ void HandlePartialBreakout(int rp_id)
    //--- Find which zone contains this RP
    for(int z = 0; z < g_confluence_count; z++)
    {
-      SConfluenceZone &zone = g_confluence_array[z];
+      SConfluenceZone zone = g_confluence_array[z];
 
       bool found = false;
       for(int j = 0; j < zone.rp_count; j++)
@@ -481,6 +482,9 @@ void HandlePartialBreakout(int rp_id)
                }
             }
          }
+
+         //--- Write modified zone back to array
+         g_confluence_array[z] = zone;
       }
 
       g_confluence_needs_update = true;

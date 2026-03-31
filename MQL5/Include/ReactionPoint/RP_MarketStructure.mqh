@@ -261,7 +261,7 @@ double GetStructureScoreAdj(int rp_index)
    if(!g_use_market_structure) return 0.0;
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
 
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    // RP SUPPORT + BULLISH structure (aligned with BOS) → +15
    if(rp.rp_type == RP_SUPPORT && g_current_structure == STRUCTURE_BULLISH)

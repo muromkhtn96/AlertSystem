@@ -240,7 +240,7 @@ void UpdateDashboard()
       if(best_idx >= 0)
       {
          shown_indices[shown] = best_idx;
-         SReactionPoint &rp = g_rp_array[best_idx];
+         SReactionPoint rp = g_rp_array[best_idx];
          string type_str = (rp.rp_type == RP_SUPPORT) ? "SUP" : "RES";
          double dist_pips = PriceToPips(MathAbs(bid - rp.price));
          string conf_str = rp.is_confluence ? "Conf" : "";
@@ -339,7 +339,7 @@ void UpdateDashboard()
    for(int s = 0; s < g_setup_count; s++)
    {
       if(!g_setup_array[s].is_active) continue;
-      SEntrySetup &setup = g_setup_array[s];
+      SEntrySetup setup = g_setup_array[s];
 
       string dir = (setup.direction == RP_SUPPORT) ? "BUY" : "SELL";
       color  dir_color = (setup.direction == RP_SUPPORT) ? g_color_entry_buy : g_color_entry_sell;
@@ -414,7 +414,7 @@ void UpdateRadar(int x_base, int y_start, int fs)
       if(best_idx < 0) break;
       selected[best_idx] = true;
 
-      SReactionPoint &rp = g_rp_array[best_idx];
+      SReactionPoint rp = g_rp_array[best_idx];
       double dist_pips = PriceToPips(MathAbs(bid - rp.price));
 
       string entry = DoubleToString(rp.price, digits) + " " +

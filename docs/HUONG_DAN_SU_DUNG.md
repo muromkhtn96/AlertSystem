@@ -40,31 +40,42 @@ Trong MetaTrader 5, vào menu **File → Open Data Folder** (hoặc nhấn `Ctrl
 
 ### Bước 2: Sao chép file
 
-Sao chép toàn bộ thư mục `MQL5\Indicators\ReactionPoint\` vào thư mục dữ liệu MT5 sao cho cấu trúc thư mục như sau:
+Sao chép **2 thư mục** vào thư mục dữ liệu MT5 (Data Folder) sao cho cấu trúc như sau:
 
 ```
-MQL5/
-└── Indicators/
-    └── ReactionPoint/
-        ├── RP_Main.mq5              ← File chỉ báo chính
-        └── Include/
-            ├── RP_Defines.mqh       ← Định nghĩa enum, struct, hằng số
-            ├── RP_Utils.mqh         ← Hàm tiện ích
-            ├── RP_Detection.mqh     ← Phát hiện swing point
-            ├── RP_Scoring.mqh       ← Tính điểm
-            ├── RP_RegimeFilter.mqh  ← Module A: Lọc xu hướng ADX
-            ├── RP_DynamicDecay.mqh  ← Module B: Giảm điểm theo thời gian
-            ├── RP_EntrySetup.mqh    ← Module C: Gợi ý vào lệnh
-            ├── RP_Confluence.mqh    ← Module D: Hợp lưu đa khung
-            ├── RP_Session.mqh       ← Module E: Phiên giao dịch
-            ├── RP_NewsFilter.mqh    ← Module F: Lọc tin tức
-            ├── RP_SpreadFilter.mqh  ← Module G: Lọc spread
-            ├── RP_MarketStructure.mqh ← Module H: Cấu trúc thị trường
-            ├── RP_Drawing.mqh       ← Vẽ vùng RP trên chart
-            ├── RP_Dashboard.mqh     ← Bảng thông tin
-            ├── RP_Alerts.mqh        ← Hệ thống cảnh báo
-            └── RP_Stats.mqh         ← Thống kê hiệu suất
+<MT5 Data Folder>/
+└── MQL5/
+    ├── Indicators/
+    │   └── ReactionPoint/
+    │       └── RP_Main.mq5              ← File chỉ báo chính
+    │
+    └── Include/
+        └── ReactionPoint/
+            ├── RP_Defines.mqh           ← Định nghĩa enum, struct, hằng số
+            ├── RP_Utils.mqh             ← Hàm tiện ích
+            ├── RP_Detection.mqh         ← Phát hiện swing point
+            ├── RP_Scoring.mqh           ← Tính điểm
+            ├── RP_RegimeFilter.mqh      ← Module A: Lọc xu hướng ADX
+            ├── RP_DynamicDecay.mqh      ← Module B: Giảm điểm theo thời gian
+            ├── RP_EntrySetup.mqh        ← Module C: Gợi ý vào lệnh
+            ├── RP_Confluence.mqh        ← Module D: Hợp lưu đa khung
+            ├── RP_Session.mqh           ← Module E: Phiên giao dịch
+            ├── RP_NewsFilter.mqh        ← Module F: Lọc tin tức
+            ├── RP_SpreadFilter.mqh      ← Module G: Lọc spread
+            ├── RP_MarketStructure.mqh   ← Module H: Cấu trúc thị trường
+            ├── RP_Drawing.mqh           ← Vẽ vùng RP trên chart
+            ├── RP_Dashboard.mqh         ← Bảng thông tin
+            ├── RP_Alerts.mqh            ← Hệ thống cảnh báo
+            ├── RP_Stats.mqh             ← Thống kê hiệu suất
+            └── RP_Logger.mqh            ← Ghi log hệ thống
 ```
+
+> **Lưu ý quan trọng:** Các file `.mqh` phải nằm trong `MQL5/Include/ReactionPoint/` (không phải trong `Indicators/`), vì code sử dụng `#include <ReactionPoint/...>` — MQL5 tìm file include trong thư mục `Include/` mặc định.
+
+**Cách copy nhanh:**
+
+1. Từ thư mục dự án, copy `MQL5/Indicators/ReactionPoint/` → `<Data Folder>/MQL5/Indicators/ReactionPoint/`
+2. Copy `MQL5/Include/ReactionPoint/` → `<Data Folder>/MQL5/Include/ReactionPoint/`
 
 ### Bước 3: Biên dịch (Compile)
 

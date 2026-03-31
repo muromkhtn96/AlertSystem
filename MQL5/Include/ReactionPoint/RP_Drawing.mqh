@@ -41,7 +41,7 @@ int GetLevelAlpha(ENUM_RP_LEVEL level)
 color GetRPColor(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return clrGray;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
 
    if(rp.is_role_reversed) return g_color_role_reversal;
    if(rp.is_confluence)    return g_color_confluence;
@@ -62,7 +62,7 @@ color GetRPColor(int rp_index)
 void DrawRPZone(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
 
    //--- Clean mode: only draw Premium + Level 1
@@ -132,7 +132,7 @@ void DrawRPZone(int rp_index)
 void DrawConfluenceGlow(int conf_index)
 {
    if(conf_index < 0 || conf_index >= g_confluence_count) return;
-   SConfluenceZone &zone = g_confluence_array[conf_index];
+   SConfluenceZone zone = g_confluence_array[conf_index];
 
    //--- Only for zones with 3+ RPs
    if(zone.rp_count < 3) return;
@@ -271,7 +271,7 @@ string GetLevelIcon(ENUM_RP_LEVEL level)
 void DrawRPLabel(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
-   SReactionPoint &rp = g_rp_array[rp_index];
+   SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
    if(rp.final_score < g_min_score_to_show) return;
 
@@ -365,7 +365,7 @@ void DrawRPLabel(int rp_index)
 void DrawEntrySetupPanel(int setup_index)
 {
    if(setup_index < 0 || setup_index >= g_setup_count) return;
-   SEntrySetup &setup = g_setup_array[setup_index];
+   SEntrySetup setup = g_setup_array[setup_index];
    if(!setup.is_active) return;
 
    //--- Find RP score
@@ -455,7 +455,7 @@ void DrawEntrySetupPanel(int setup_index)
 void DrawSLTPLines(int setup_index)
 {
    if(setup_index < 0 || setup_index >= g_setup_count) return;
-   SEntrySetup &setup = g_setup_array[setup_index];
+   SEntrySetup setup = g_setup_array[setup_index];
    if(!setup.is_active) return;
 
    string prefix = OBJECT_PREFIX + "SLTP_" + IntegerToString(setup_index) + "_";
@@ -626,7 +626,7 @@ void RedrawChangedRP()
 
    for(int i = 0; i < g_rp_count; i++)
    {
-      SReactionPoint &rp = g_rp_array[i];
+      SReactionPoint rp = g_rp_array[i];
 
       //--- Check if state changed
       bool changed = false;
