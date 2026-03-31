@@ -81,8 +81,9 @@ double GetSessionScoreAdj(ENUM_SESSION session)
    //--- Pair-specific adjustments (P22)
    if(g_is_gbp_pair)
    {
-      if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly
-      if(session == SESSION_LONDON)      adj += 3.0;
+      if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London Open
+      if(session == SESSION_LONDON)      adj += 3.0;  // GBP active throughout London
+      if(session == SESSION_ASIAN)       adj -= 5.0;  // GBP Asian zones unreliable (-10 → -15)
    }
 
    if(g_is_jpy_pair)
@@ -93,7 +94,8 @@ double GetSessionScoreAdj(ENUM_SESSION session)
 
    if(g_is_cross_pair)
    {
-      if(session == SESSION_DEAD) adj += 5.0;   // Crosses less session-dependent
+      if(session == SESSION_DEAD)    adj += 5.0;  // Crosses less session-dependent
+      if(session == SESSION_OVERLAP) adj -= 5.0;  // Overlap less meaningful for crosses (+15 → +10)
    }
 
    return adj;

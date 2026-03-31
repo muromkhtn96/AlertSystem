@@ -55,6 +55,8 @@ struct SReactionPoint
    double           price;
    double           zone_high;
    double           zone_low;
+   double           zone_high_original;   // P24c: original zone edge before retest refinement
+   double           zone_low_original;    // P24c: original zone edge before retest refinement
    datetime         time_formed;
    datetime         time_last_tested;
    int              bar_formed;
@@ -75,6 +77,11 @@ struct SReactionPoint
    double           display_opacity;
    int              day_of_week_formed;
    bool             has_liquidity_sweep;
+   bool             has_wick_filter;       // P24d: true if wick ratio filter trimmed zone
+   int              strong_test_count;     // P25a: body rejection tests (high quality)
+   int              weak_test_count;       // P25a: wick-only touch tests (low quality)
+   double           test_volumes[4];       // P25b: tick volume at last 4 tests (circular)
+   int              test_vol_index;        // P25b: next write index for test_volumes
 
    void Init()
    {
@@ -87,6 +94,8 @@ struct SReactionPoint
       price                = 0.0;
       zone_high            = 0.0;
       zone_low             = 0.0;
+      zone_high_original   = 0.0;
+      zone_low_original    = 0.0;
       time_formed          = 0;
       time_last_tested     = 0;
       bar_formed           = 0;
@@ -107,6 +116,11 @@ struct SReactionPoint
       display_opacity      = 100.0;
       day_of_week_formed   = 0;
       has_liquidity_sweep  = false;
+      has_wick_filter      = false;
+      strong_test_count    = 0;
+      weak_test_count      = 0;
+      ArrayInitialize(test_volumes, 0.0);
+      test_vol_index       = 0;
    }
 };
 

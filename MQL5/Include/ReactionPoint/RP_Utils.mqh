@@ -823,6 +823,8 @@ void ApplyVolatilityScaling()
    g_proximity_alert_pips   = (int)MathRound(g_proximity_alert_pips * ratio);
    g_reset_alert_pips       = (int)MathRound(g_reset_alert_pips * ratio);
    g_sl_buffer_pips         = (int)MathRound(g_sl_buffer_pips * ratio);
+   g_zone_width_pips        = (int)MathMax(MathRound(g_zone_width_pips * ratio), 3);   // P22 fix: scale zone min width
+   g_min_candle_size_pips   = (int)MathMax(MathRound(g_min_candle_size_pips * ratio), 2); // P22 fix: scale candle filter
 
    //--- Cross pairs: relax spread filter
    if(g_is_cross_pair)

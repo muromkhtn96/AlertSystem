@@ -246,16 +246,57 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
       rp.zone_low  = MathMin(bar_open, bar_close);
    }
 
-   //--- Safety clamps: min = half of Zone_Width_Pips, max = 1.5x ATR
-   double zone_range = rp.zone_high - rp.zone_low;
+   //--- P24a: Wick Ratio Filter — trim zone when wick dominates candle
+   //    When wick >= 60% of range, zone focuses on the 30% nearest the reaction edge
+   //    Uses bar_range as basis (not body_size) to avoid ultra-thin zones on pinbars
+   double bar_range   = bar_high - bar_low;
+
+   if(bar_range > 0.0)
+   {
+      double body_top    = MathMax(bar_open, bar_close);
+      double body_bottom = MathMin(bar_open, bar_close);
+      double upper_wick  = bar_high - body_top;
+      double lower_wick  = body_bottom - bar_low;
+      double trim_width  = bar_range * 0.30;  // zone = 30% of candle range
+
+      if(rp_type == RP_SUPPORT && lower_wick >= bar_range * 0.60)
+      {
+         // Long lower wick: liquidity grab at bottom → zone hugs the wick tip area
+         rp.zone_low  = bar_low;
+         rp.zone_high = bar_low + trim_width;
+         rp.has_wick_filter = true;
+      }
+      else if(rp_type == RP_RESISTANCE && upper_wick >= bar_range * 0.60)
+      {
+         // Long upper wick: liquidity grab at top → zone hugs the wick tip area
+         rp.zone_high = bar_high;
+         rp.zone_low  = bar_high - trim_width;
+         rp.has_wick_filter = true;
+      }
+   }
+
+   //--- P24b: ATR-Adaptive Width Cap by timeframe
    double min_width  = PipsToPrice(g_zone_width_pips / 2.0);
-   double max_width  = (g_cached_atr14 > 0.0) ? g_cached_atr14 * 1.5 : PipsToPrice(30);
+   double atr_multiplier = 1.0;
+   ENUM_TIMEFRAMES tf = Period();
+   if(tf <= PERIOD_M15)
+      atr_multiplier = 0.5;
+   else if(tf <= PERIOD_H4)
+      atr_multiplier = 0.7;
+   else
+      atr_multiplier = 1.0;
+
+   double max_width  = (g_cached_atr14 > 0.0) ? g_cached_atr14 * atr_multiplier : PipsToPrice(30);
+
+   //--- Safety clamps
+   double zone_range = rp.zone_high - rp.zone_low;
 
    if(zone_range < min_width)
    {
       double center = (rp.zone_high + rp.zone_low) / 2.0;
       rp.zone_high = center + min_width / 2.0;
       rp.zone_low  = center - min_width / 2.0;
+      zone_range = min_width;  // Update after clamp
    }
 
    if(zone_range > max_width)
@@ -265,6 +306,10 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
       else
          rp.zone_low = rp.zone_high - max_width;
    }
+   //--- P24c: Save original zone edges for retest refinement reference
+   rp.zone_high_original   = rp.zone_high;
+   rp.zone_low_original    = rp.zone_low;
+
    rp.time_formed          = iTime(_Symbol, PERIOD_CURRENT, bar_index);
    rp.bar_formed           = bar_index;
    rp.source_tf            = Period();
@@ -287,6 +332,9 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    // Store
    g_rp_array[slot] = rp;
    g_rp_dirty[slot] = true;
+
+   // P26: Log zone creation
+   LogZoneCreated(rp);
 }
 
 //+------------------------------------------------------------------+
@@ -418,6 +466,10 @@ void CheckRoleReversalRetest(int rp_index, int current_bar,
    rp.rp_type = (rp.rp_type == RP_SUPPORT) ? RP_RESISTANCE : RP_SUPPORT;
    rp.is_role_reversed = true;
    rp.test_count = 0;
+   rp.strong_test_count = 0;       // P25a: reset quality counters
+   rp.weak_test_count   = 0;       // P25a: reset quality counters
+   ArrayInitialize(rp.test_volumes, 0.0);  // P25b: reset volume history
+   rp.test_vol_index    = 0;       // P25b: reset volume index
    rp.is_fresh = true;
    rp.time_last_tested = TimeCurrent();
    rp.bar_last_tested = current_bar;
@@ -512,11 +564,77 @@ void CheckBreakoutsAndRetests()
             rp.is_fresh = false;
             rp.time_last_tested = TimeCurrent();
             rp.bar_last_tested = current_bar;
+
+            //--- P25a: Test Quality — classify strong (body) vs weak (wick-only)
+            //    Body rejection: close is inside or beyond zone = price truly engaged
+            //    Wick touch: only wick entered zone, body stayed outside = weak signal
+            bool is_body_test = false;
+            double open_1 = iOpen(_Symbol, PERIOD_CURRENT, 1);
+            if(rp.rp_type == RP_SUPPORT)
+            {
+               // Body test: close or open entered the zone (not just wick)
+               double body_low = MathMin(open_1, close_1);
+               is_body_test = (body_low <= rp.zone_high && body_low >= rp.zone_low);
+            }
+            else
+            {
+               double body_high = MathMax(open_1, close_1);
+               is_body_test = (body_high >= rp.zone_low && body_high <= rp.zone_high);
+            }
+
+            if(is_body_test)
+               rp.strong_test_count++;
+            else
+               rp.weak_test_count++;
+
+            //--- P25b: Zone Absorption — track volume at each test
+            long test_tick_vol = iVolume(_Symbol, PERIOD_CURRENT, 1);
+            rp.test_volumes[rp.test_vol_index % 4] = (double)test_tick_vol;
+            rp.test_vol_index++;
+
+            //--- P26: Capture zone width before refinement for logging
+            double zone_width_before_refine = rp.zone_high - rp.zone_low;
+
+            //--- P24c: Re-test Refinement — tighten zone to actual reaction point
+            //    Uses weighted average: new_edge = old_edge * 0.6 + reaction * 0.4
+            //    This prevents a single shallow touch from locking zone too tight.
+            //    Zone can expand back toward original if deeper test occurs.
+            double min_zone = PipsToPrice(g_zone_width_pips / 2.0);
+
+            if(rp.rp_type == RP_SUPPORT)
+            {
+               // Support: low_1 is where price actually rejected
+               // Handles both shallow tests (shrink) and deeper tests (expand back)
+               if(low_1 >= rp.zone_low_original)
+               {
+                  double target = rp.zone_low * 0.6 + low_1 * 0.4;
+                  target = MathMax(target, rp.zone_low_original);
+                  if(rp.zone_high - target >= min_zone)
+                     rp.zone_low = target;
+               }
+            }
+            else // RP_RESISTANCE
+            {
+               if(high_1 <= rp.zone_high_original)
+               {
+                  double target = rp.zone_high * 0.6 + high_1 * 0.4;
+                  target = MathMin(target, rp.zone_high_original);
+                  if(target - rp.zone_low >= min_zone)
+                     rp.zone_high = target;
+               }
+            }
+
+            //--- P26: Log test event
+            LogZoneTest(rp, is_body_test, zone_width_before_refine,
+                        rp.zone_high - rp.zone_low,
+                        low_1, high_1, close_1, test_tick_vol);
+
             g_rp_dirty[i] = true;
          }
          else
          {
             // Breakout confirmed
+            LogZoneBroken(rp);  // P26: Log breakout
             HandleBreakout(i, current_bar);
          }
       }

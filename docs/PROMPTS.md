@@ -2706,6 +2706,8 @@ Kết hợp pair detection (từ symbol name) để điều chỉnh session scor
    g_proximity_alert_pips    = (int)MathRound(g_proximity_alert_pips * ratio);
    g_reset_alert_pips        = (int)MathRound(g_reset_alert_pips * ratio);
    g_sl_buffer_pips          = (int)MathRound(g_sl_buffer_pips * ratio);
+   g_zone_width_pips         = (int)MathMax(MathRound(g_zone_width_pips * ratio), 3);   // P22 fix: min zone width
+   g_min_candle_size_pips    = (int)MathMax(MathRound(g_min_candle_size_pips * ratio), 2); // P22 fix: candle filter
    
    Print("RP: ATR ratio = ", DoubleToString(ratio, 2),
          " | MinDist=", g_min_rp_distance_pips,
@@ -2751,13 +2753,15 @@ GetSessionScoreAdj(ENUM_SESSION session):
   if(g_is_gbp_pair):
     if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London open
     if(session == SESSION_LONDON)      adj += 3.0;
+    if(session == SESSION_ASIAN)       adj -= 5.0;  // GBP Asian zones unreliable (-10 → -15)
   
   if(g_is_jpy_pair):
     if(session == SESSION_ASIAN) adj += 7.0;         // JPY active in Asian (-10 → -3)
     if(session == SESSION_DEAD)  adj += 5.0;         // Less dead for JPY (-20 → -15)
   
   if(g_is_cross_pair):
-    if(session == SESSION_DEAD)  adj += 5.0;         // Crosses less session-dependent
+    if(session == SESSION_DEAD)    adj += 5.0;       // Crosses less session-dependent
+    if(session == SESSION_OVERLAP) adj -= 5.0;       // Overlap less meaningful for crosses (+15 → +10)
   
   return adj;
 
@@ -2916,6 +2920,430 @@ LƯU Ý:
 
 ---
 
+## PROMPT 24: Zone Precision Enhancement (Sửa RP_Defines.mqh + RP_Detection.mqh)
+
+```
+Nâng cao chất lượng zone — zone chính xác ngay điểm phản ứng, không quá to hoặc quá nhỏ.
+3 cải tiến: Wick Ratio Filter, ATR-Adaptive Width Cap, Re-test Refinement.
+
+Sửa file: RP_Defines.mqh, RP_Detection.mqh
+Phụ thuộc: P21 (Dynamic Zone Width) — mở rộng logic zone width hiện tại
+
+=== P24a: WICK RATIO FILTER ===
+
+MỤC ĐÍCH: Nến có wick dài (>60% range) tạo zone quá rộng vì lấy toàn bộ body.
+Zone chỉ cần bám sát vùng reaction (liquidity grab area), không cần toàn bộ candle.
+
+LOGIC (trong CreateRP(), SAU khi set zone_high/zone_low từ candle body, TRƯỚC safety clamps):
+
+  double bar_range = bar_high - bar_low;
+
+  if(bar_range > 0.0):
+    double body_top    = MathMax(bar_open, bar_close);
+    double body_bottom = MathMin(bar_open, bar_close);
+    double upper_wick  = bar_high - body_top;
+    double lower_wick  = body_bottom - bar_low;
+    double trim_width  = bar_range * 0.30;  // zone = 30% of candle range
+
+    if(rp_type == RP_SUPPORT && lower_wick >= bar_range * 0.60):
+      // Wick dài dưới: liquidity grab ở đáy → zone bám sát wick tip
+      rp.zone_low  = bar_low;
+      rp.zone_high = bar_low + trim_width;
+
+    else if(rp_type == RP_RESISTANCE && upper_wick >= bar_range * 0.60):
+      // Wick dài trên: liquidity grab ở đỉnh → zone bám sát wick tip
+      rp.zone_high = bar_high;
+      rp.zone_low  = bar_high - trim_width;
+
+LÝ DO dùng bar_range * 0.30 thay vì body_size * 0.5:
+- Pinbar body rất nhỏ (5-10% range) → body_size * 0.5 tạo zone 2-3 pips = quá hẹp
+- 30% range cho zone đủ buffer mà vẫn tập trung vào vùng liquidity grab
+- VÍ DỤ: range 50 pips → zone = 15 pips (hợp lý cho cả M15 lẫn H4)
+
+
+=== P24b: ATR-ADAPTIVE WIDTH CAP THEO TIMEFRAME ===
+
+MỤC ĐÍCH: Thay max_width = 1.5x ATR cố định bằng multiplier theo TF.
+TF thấp cần zone chính xác hơn, TF cao cho phép zone rộng hơn.
+
+LOGIC (trong CreateRP(), thay dòng tính max_width):
+
+  double atr_multiplier = 1.0;
+  ENUM_TIMEFRAMES tf = Period();
+  if(tf <= PERIOD_M15)
+    atr_multiplier = 0.5;       // M1-M15: zone chặt, scalping precision
+  else if(tf <= PERIOD_H4)
+    atr_multiplier = 0.7;       // M30-H4: zone trung bình
+  else
+    atr_multiplier = 1.0;       // D1+: zone rộng hơn, swing trading
+
+  double max_width = (g_cached_atr14 > 0.0) ? g_cached_atr14 * atr_multiplier : PipsToPrice(30);
+
+VÍ DỤ thực tế:
+  ATR14 = 20 pips trên M15 → max zone = 10 pips (0.5x)
+  ATR14 = 50 pips trên H4  → max zone = 35 pips (0.7x)
+  ATR14 = 100 pips trên D1 → max zone = 100 pips (1.0x)
+
+
+=== P24c: RE-TEST REFINEMENT — ZONE TỰ THU HẸP ===
+
+MỤC ĐÍCH: Mỗi lần zone bị test, thu hẹp zone dựa vào điểm phản ứng thực tế.
+Zone "học" từ price action → càng test càng chính xác.
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  double zone_high_original;   // Lưu zone edge ban đầu
+  double zone_low_original;    // Để có thể debug/so sánh
+
+  Init():
+    zone_high_original = 0.0;
+    zone_low_original  = 0.0;
+
+BƯỚC 2 — Lưu original edges trong CreateRP() (RP_Detection.mqh):
+
+  // SAU safety clamps, TRƯỚC set time_formed:
+  rp.zone_high_original = rp.zone_high;
+  rp.zone_low_original  = rp.zone_low;
+
+BƯỚC 3 — Refinement logic trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+
+  // Trong block if(!is_breakout), SAU test_count++:
+  // Dùng WEIGHTED AVERAGE (60/40) thay vì snap trực tiếp → tránh shallow touch khoá zone
+  double min_zone = PipsToPrice(g_zone_width_pips / 2.0);
+
+  if(rp.rp_type == RP_SUPPORT):
+    if(low_1 > rp.zone_low_original):
+      // Shallow test → thu hẹp dần (weighted average)
+      double target = rp.zone_low * 0.6 + low_1 * 0.4;
+      target = MathMax(target, rp.zone_low_original);  // Không vượt original
+      if(rp.zone_high - target >= min_zone):
+        rp.zone_low = target;
+
+    else if(low_1 < rp.zone_low && low_1 >= rp.zone_low_original):
+      // Test sâu hơn edge hiện tại → expand lại về hướng original
+      double target = rp.zone_low * 0.6 + low_1 * 0.4;
+      target = MathMax(target, rp.zone_low_original);
+      rp.zone_low = target;
+
+  else: // RP_RESISTANCE (logic đối xứng)
+    if(high_1 < rp.zone_high_original):
+      double target = rp.zone_high * 0.6 + high_1 * 0.4;
+      target = MathMin(target, rp.zone_high_original);
+      if(target - rp.zone_low >= min_zone):
+        rp.zone_high = target;
+
+    else if(high_1 > rp.zone_high && high_1 <= rp.zone_high_original):
+      double target = rp.zone_high * 0.6 + high_1 * 0.4;
+      target = MathMin(target, rp.zone_high_original);
+      rp.zone_high = target;
+
+QUY TẮC QUAN TRỌNG:
+1. Dùng weighted average 60/40 — KHÔNG snap trực tiếp (tránh shallow touch khoá zone)
+2. Zone có thể EXPAND lại nếu test sâu hơn (nhưng không vượt original)
+3. Giữ minimum width (g_zone_width_pips / 2) — zone không bao giờ nhỏ hơn floor
+4. zone_high_original / zone_low_original giữ nguyên để debug + làm ceiling/floor
+5. rp.price (swing point gốc) KHÔNG thay đổi — chỉ zone visual/detection thay đổi
+
+VÍ DỤ minh họa (weighted average):
+  Zone Support ban đầu: [1.0800 - 1.0850] (50 pips), original_low = 1.0800
+  Test 1: low_1 = 1.0845 (shallow touch)
+    target = 1.0800 * 0.6 + 1.0845 * 0.4 = 1.0818
+    zone = [1.0818 - 1.0850] = 32 pips ✓ (KHÔNG bị khoá ở 5 pips)
+
+  Test 2: low_1 = 1.0830
+    target = 1.0818 * 0.6 + 1.0830 * 0.4 = 1.0823
+    zone = [1.0823 - 1.0850] = 27 pips ✓ (thu hẹp dần)
+
+  Test 3: low_1 = 1.0805 (sâu hơn edge hiện tại)
+    target = 1.0823 * 0.6 + 1.0805 * 0.4 = 1.0816
+    zone = [1.0816 - 1.0850] = 34 pips ✓ (expand lại hợp lý)
+
+  → Zone hội tụ dần về vùng giá thực sự có phản ứng institutional
+
+LƯU Ý:
+- Anti-repainting: dùng bar[1] data (low_1, high_1) — đã có sẵn trong function
+- Drawing sẽ tự cập nhật vì dùng rp.zone_high/zone_low
+- Confluence check dùng zone edges → zone thu hẹp = confluence chính xác hơn
+
+
+=== P24d: ZONE PRECISION SCORE — KẾT NỐI ZONE QUALITY VÀO SCORING ===
+
+MỤC ĐÍCH: Scoring hệ thống KHÔNG biết zone chính xác hay không.
+P24a-c cải thiện zone geometry nhưng scoring không phản ánh. Cần thêm
+CalcZonePrecisionScore() để thưởng/phạt zone dựa trên precision.
+
+BƯỚC 1 — Thêm field vào SReactionPoint (RP_Defines.mqh):
+
+  bool has_wick_filter;   // true nếu P24a đã trim zone
+
+  Init():
+    has_wick_filter = false;
+
+BƯỚC 2 — Set flag trong CreateRP() (RP_Detection.mqh):
+
+  // Trong block wick filter (P24a), khi trim xảy ra:
+  rp.has_wick_filter = true;
+
+BƯỚC 3 — Thêm CalcZonePrecisionScore() (RP_Scoring.mqh), TRƯỚC CalcBaseScore():
+
+  double CalcZonePrecisionScore(int rp_index):
+    double zone_width = rp.zone_high - rp.zone_low;
+    double width_ratio = zone_width / g_cached_atr14;
+
+    // 1. Tight zone: width < 0.3x ATR → +5 (institutional precision)
+    if(width_ratio < 0.30): score += 5.0;
+    // Penalty: width > 0.8x ATR → -5 (zone quá rộng)
+    else if(width_ratio > 0.80): score -= 5.0;
+
+    // 2. Retest-refined: test_count >= 2 AND zone đã shrunk >= 15% → +5
+    if(rp.test_count >= 2):
+      double original_width = zone_high_original - zone_low_original;
+      if(zone_width < original_width * 0.85): score += 5.0;
+
+    // 3. Wick filter applied → +3 (zone targets liquidity grab)
+    if(rp.has_wick_filter): score += 3.0;
+
+    return score;  // Range: [-5, +13]
+
+BƯỚC 4 — Tích hợp vào CalcBaseScore() (RP_Scoring.mqh):
+
+  // SAU Volume Delta, TRƯỚC return:
+  score += CalcZonePrecisionScore(rp_index);  // P24d: [-5, +13]
+
+IMPACT trên scoring:
+  Base Score max: 100 → vẫn 100 (MathMin cap)
+  Nhưng zone chính xác sẽ đạt 100 dễ hơn:
+    Tight zone (+5) + Wick filter (+3) + Retest refined (+5) = +13 điểm
+    Zone rộng bị phạt -5 → khó đạt Premium
+```
+
+---
+
+## PROMPT 25: Test Quality & Zone Absorption (Sửa RP_Defines.mqh + RP_Detection.mqh + RP_Scoring.mqh)
+
+```
+Nâng cao hiệu quả zone bằng 2 yếu tố: phân biệt chất lượng test, phát hiện zone bị ăn mòn.
+Sửa file: RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh
+Phụ thuộc: P24 (Zone Precision) — mở rộng test logic hiện tại
+
+=== P25a: TEST QUALITY — PHÂN BIỆT BODY REJECTION vs WICK TOUCH ===
+
+MỤC ĐÍCH: Hiện tại mọi test đều đếm ngang nhau (test_count++).
+Nhưng body rejection (close trong zone rồi reject) khác xa wick touch (chỉ wick chạm).
+Body rejection = institutional engagement thật. Wick touch = có thể chỉ là noise.
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  int strong_test_count;    // Body rejection tests
+  int weak_test_count;      // Wick-only touch tests
+
+  Init():
+    strong_test_count = 0;
+    weak_test_count   = 0;
+
+BƯỚC 2 — Classify test trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+  // Trong block if(!is_breakout), SAU test_count++:
+
+  bool is_body_test = false;
+  double open_1 = iOpen(_Symbol, PERIOD_CURRENT, 1);
+
+  if(rp.rp_type == RP_SUPPORT):
+    // Body test: body bottom (min of open,close) entered zone
+    double body_low = MathMin(open_1, close_1);
+    is_body_test = (body_low <= rp.zone_high && body_low >= rp.zone_low);
+  else:
+    // Body test: body top (max of open,close) entered zone
+    double body_high = MathMax(open_1, close_1);
+    is_body_test = (body_high >= rp.zone_low && body_high <= rp.zone_high);
+
+  if(is_body_test): rp.strong_test_count++;
+  else:             rp.weak_test_count++;
+
+BƯỚC 3 — THAY THẾ test_count scoring trong CalcBaseScore() (RP_Scoring.mqh):
+
+  // THAY THẾ switch(rp.test_count) BẰNG:
+  double CalcTestQualityScore(int rp_index):
+    double weighted = strong_test_count + weak_test_count * 0.3;
+
+    if(weighted < 0.1):  return 0.0;
+    if(weighted < 1.1):  return 5.0;
+    if(weighted < 2.1):  return 12.0;
+    if(weighted < 3.1):  return 20.0;
+
+    // 3+ tests: bonus cho strong-dominant
+    double strong_ratio = strong_test_count / test_count;
+    if(strong_ratio >= 0.7): return 25.0;  // +5 bonus vs max cũ 20
+
+    return MathMax(20.0 - (weighted - 3.0) * 5.0, 5.0);
+
+IMPACT:
+  - Max cũ: 20đ → Max mới: 25đ (zone có 3+ body rejections)
+  - 3 wick touches: weighted = 0.9 → chỉ 5đ (trước đây 20đ!)
+  - 2 body + 1 wick: weighted = 2.3 → 12đ (hợp lý)
+
+VÍ DỤ:
+  Zone A: 3 body rejections → 25đ (Premium quality test)
+  Zone B: 3 wick touches → 5đ (chỉ noise, không uy tín)
+  Zone C: 2 body + 2 wick → weighted=2.6 → 12đ (trung bình)
+
+
+=== P25b: ZONE ABSORPTION — PHÁT HIỆN ZONE BỊ ĂN MÒN ===
+
+MỤC ĐÍCH: Volume pattern qua các lần test cho biết zone đang mạnh hay đang bị phá:
+  - Volume GIẢM dần → seller/buyer đang cạn → zone HỮU HIỆU
+  - Volume TĂNG dần → institutional accumulation ngược chiều → zone SẮP BỊ PHÁ
+
+BƯỚC 1 — Thêm fields vào SReactionPoint (RP_Defines.mqh):
+
+  double test_volumes[4];   // Tick volume tại 4 lần test gần nhất (circular buffer)
+  int    test_vol_index;    // Next write index
+
+  Init():
+    ArrayInitialize(test_volumes, 0.0);
+    test_vol_index = 0;
+
+BƯỚC 2 — Track volume trong CheckBreakoutsAndRetests() (RP_Detection.mqh):
+  // Trong block if(!is_breakout), SAU test quality logic:
+
+  long test_tick_vol = iVolume(_Symbol, PERIOD_CURRENT, 1);
+  rp.test_volumes[rp.test_vol_index % 4] = (double)test_tick_vol;
+  rp.test_vol_index++;
+
+BƯỚC 3 — CalcAbsorptionAdj() trong RP_Scoring.mqh:
+  // ĐẶT vào CalcFinalScore (context adjustment, không phải base)
+
+  double CalcAbsorptionAdj(int rp_index):
+    int tests_recorded = MathMin(rp.test_vol_index, 4);
+    if(tests_recorded < 2): return 0.0;
+
+    // So sánh volume nửa đầu vs nửa sau
+    double avg_early, avg_late;
+    // (đọc circular buffer theo thứ tự thời gian)
+    double change = (avg_late - avg_early) / avg_early;
+
+    if(change > 0.50): return -10.0;  // Volume tăng mạnh → zone bị absorb
+    if(change > 0.20): return -5.0;   // Volume tăng vừa → cảnh báo
+    if(change < -0.30): return +5.0;  // Volume giảm → zone đang hold
+
+    return 0.0;
+
+BƯỚC 4 — Tích hợp vào CalcFinalScore():
+  // THÊM vào adjusted sum:
+  + CalcAbsorptionAdj(rp_index)   // P25b: [-10, +5]
+
+LƯU Ý:
+- Circular buffer [4] giữ memory footprint nhỏ
+- Chỉ cần 2 tests để bắt đầu so sánh
+- Anti-repainting: dùng iVolume(bar=1) — bar đã đóng
+- Volume ở đây là tick volume (proxy cho real volume trên Forex)
+- Absorption detection là CẢNH BÁO SỚM — zone có thể vẫn hold 1-2 test nữa
+```
+
+---
+
+## PROMPT 26: Zone Data Logger (Tạo RP_Logger.mqh + Sửa RP_Detection.mqh + RP_Main.mq5)
+
+```
+Tạo hệ thống logging CSV để thu thập dữ liệu zone thực tế, phục vụ phân tích
+và tinh chỉnh scoring weights.
+
+Tạo file: RP_Logger.mqh
+Sửa file: RP_Detection.mqh, RP_Main.mq5
+Phụ thuộc: P24, P25 (cần has_wick_filter, strong/weak_test_count)
+
+=== KIẾN TRÚC ===
+
+3 file CSV output (trong MQL5/Files/RP_Logs/):
+
+1. {SYMBOL}_{TF}_zones.csv — Log mỗi zone được tạo
+   Columns: timestamp, rp_id, type, price, zone_high, zone_low,
+            zone_width_pips, atr14_pips, width_atr_ratio,
+            pattern, reaction_pips, volume_ratio,
+            session, regime, has_wick_filter,
+            base_score, final_score, level
+
+2. {SYMBOL}_{TF}_tests.csv — Log mỗi lần zone bị test
+   Columns: timestamp, rp_id, test_number, is_body_test,
+            test_volume, volume_vs_ma20,
+            zone_width_before, zone_width_after,
+            reaction_bar_low, reaction_bar_high, reaction_bar_close,
+            score_at_test
+
+3. {SYMBOL}_{TF}_outcomes.csv — Kết quả phản ứng sau N bars
+   Columns: timestamp, rp_id, type, score_at_test,
+            test_count, max_favorable_pips, max_adverse_pips,
+            bars_to_max_favorable, outcome,
+            session, regime, pattern,
+            has_wick_filter, strong_tests, weak_tests,
+            zone_width_pips, width_atr_ratio
+
+=== OUTCOME MEASUREMENT ===
+
+Sau mỗi test event, hệ thống theo dõi N bars tiếp theo (default 20):
+  - max_favorable_pips: di chuyển tối đa theo hướng mong đợi
+  - max_adverse_pips: di chuyển ngược hướng
+  - outcome classification:
+    STRONG_REACT:  favorable >= 1.0x ATR (zone rất hiệu quả)
+    WEAK_REACT:    favorable >= 0.5x ATR (zone có hiệu quả)
+    FAILED:        adverse >= 0.5x ATR (zone thất bại)
+    NEUTRAL:       không có di chuyển đáng kể
+    BROKEN:        zone bị phá (breakout confirmed)
+
+=== TÍCH HỢP ===
+
+RP_Logger.mqh:
+  - InitLogger(): mở 3 file CSV + viết headers
+  - DeinitLogger(): flush + đóng files
+  - LogZoneCreated(rp): ghi khi CreateRP() hoàn tất
+  - LogZoneTest(rp, ...): ghi khi test event xảy ra
+  - LogZoneBroken(rp): ghi khi breakout confirmed
+  - RegisterPendingOutcome(rp): queue để đo reaction
+  - CheckPendingOutcomes(bars): đo reaction sau N bars
+
+RP_Detection.mqh:
+  - CreateRP() → LogZoneCreated(rp) sau khi store
+  - CheckBreakoutsAndRetests():
+    - if(!is_breakout) → LogZoneTest() sau refinement
+    - else → LogZoneBroken() trước HandleBreakout()
+
+RP_Main.mq5:
+  - Input: Enable_Logger (default false), Outcome_Measure_Bars (default 20)
+  - OnInit(): g_use_logger = Enable_Logger; InitLogger()
+  - OnDeinit(): DeinitLogger()
+  - OnCalculate(): CheckPendingOutcomes(Outcome_Measure_Bars) sau scoring
+
+=== CÁCH SỬ DỤNG ===
+
+PHASE 1 — Thu thập data:
+  1. Bật Enable_Logger = true trên GBPUSD H4 + CADJPY H4
+  2. Chạy trên demo hoặc Strategy Tester (visual mode)
+  3. Thu thập ít nhất 500+ zone events (2-4 tuần live hoặc 6 tháng backtest)
+
+PHASE 2 — Phân tích (Excel/Python):
+  1. Mở outcomes.csv → tính win rate theo:
+     - Score range (0-40, 40-60, 60-80, 80-100, 100+)
+     - Session (London vs Asian vs Overlap)
+     - Pattern (Pinbar vs Engulfing vs None)
+     - Zone width ratio (< 0.3 ATR vs > 0.8 ATR)
+     - Test quality (strong% vs weak%)
+  2. Tìm yếu tố nào THỰC SỰ tương quan với STRONG_REACT
+  3. Tìm yếu tố nào KHÔNG ảnh hưởng (có thể giảm weight)
+
+PHASE 3 — Tinh chỉnh scoring:
+  1. Điều chỉnh weights trong CalcBaseScore dựa trên correlation
+  2. Điều chỉnh module adjustments trong CalcFinalScore
+  3. Chạy lại PHASE 1 → so sánh win rate trước/sau
+
+LƯU Ý:
+- Logger dùng FILE_COMMON → file nằm trong MQL5/Files/ chung
+- Bật/tắt bằng input, mặc định OFF → không ảnh hưởng production
+- FileWrite chỉ gọi khi có event (tạo/test/break) → không ảnh hưởng hiệu năng
+- Pending outcomes dùng fixed array [50] → memory footprint nhỏ
+- Anti-repainting: tất cả data đều từ bar[1] — consistent với indicator logic
+```
+
+---
+
 ## THỨ TỰ THỰC THI TÓM TẮT
 
 ```
@@ -2962,7 +3390,12 @@ PHASE 7 — Reliability + Performance (cần Phase 6):
   P22: Pair-Adaptive Parameters         (sửa RP_Utils.mqh, RP_Session.mqh, RP_Main.mq5)
   P23: Performance Optimization          (sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
 
-  P18+P19 song song → P20 → P21 → P22 → P23 (P23 làm cuối vì sửa nhiều file)
+  P24: Zone Precision Enhancement    (sửa RP_Defines.mqh, RP_Detection.mqh)
+  P25: Test Quality & Zone Absorption (sửa RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh)
+  P26: Zone Data Logger              (tạo RP_Logger.mqh, sửa RP_Detection.mqh, RP_Main.mq5)
+
+  P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26
+  P26 chạy cuối cùng — logging cần tất cả features hoạt động đúng trước
 ```
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.

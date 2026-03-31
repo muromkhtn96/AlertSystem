@@ -135,6 +135,126 @@ double RoundNumberScore(double price)
 }
 
 //+------------------------------------------------------------------+
+//| CalcZonePrecisionScore — reward tight/refined zones (P24d)       |
+//| Range: [-5, +13]                                                  |
+//+------------------------------------------------------------------+
+double CalcZonePrecisionScore(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   SReactionPoint &rp = g_rp_array[rp_index];
+
+   double score = 0.0;
+   double zone_width = rp.zone_high - rp.zone_low;
+   if(zone_width <= 0.0 || g_cached_atr14 <= 0.0) return 0.0;
+
+   double width_ratio = zone_width / g_cached_atr14;
+
+   // 1. Tight zone bonus: width < 0.3x ATR → institutional precision (+5)
+   if(width_ratio < 0.30)
+      score += 5.0;
+   // Penalty: width > 0.8x ATR → zone too wide, low precision (-5)
+   else if(width_ratio > 0.80)
+      score -= 5.0;
+
+   // 2. Retest-refined zone: tested 2+ times AND zone has shrunk → confirmed by PA (+5)
+   if(rp.test_count >= 2)
+   {
+      double original_width = rp.zone_high_original - rp.zone_low_original;
+      if(original_width > 0.0 && zone_width < original_width * 0.85)
+         score += 5.0;  // Zone shrunk by at least 15% through retests
+   }
+
+   // 3. Wick filter applied → zone targets liquidity grab area (+3)
+   if(rp.has_wick_filter)
+      score += 3.0;
+
+   return score;  // Range: [-5, +13]
+}
+
+//+------------------------------------------------------------------+
+//| CalcTestQualityScore — weighted test count (P25a)                 |
+//| Replaces flat test_count scoring with quality-aware scoring       |
+//| Range: [0, 25]                                                    |
+//+------------------------------------------------------------------+
+double CalcTestQualityScore(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   SReactionPoint &rp = g_rp_array[rp_index];
+
+   // Weighted test count: strong = 1.0, weak = 0.3
+   double weighted = (double)rp.strong_test_count + (double)rp.weak_test_count * 0.3;
+
+   // Scoring curve: similar to original but using weighted count
+   // 0: 0, 0.3-1: 5, 1.3-2: 12, 2-3: 20, 3+: declining
+   if(weighted < 0.1)  return 0.0;
+   if(weighted < 1.1)  return 5.0;
+   if(weighted < 2.1)  return 12.0;
+   if(weighted < 3.1)  return 20.0;
+
+   // 3+ weighted: bonus for strong-dominant, penalty for weak-dominant
+   double strong_ratio = (rp.test_count > 0) ?
+      (double)rp.strong_test_count / (double)rp.test_count : 0.0;
+
+   if(strong_ratio >= 0.7)
+      return 25.0;  // Mostly body rejections = very reliable zone (+5 bonus)
+
+   // Mixed or mostly weak: standard declining curve
+   return MathMax(20.0 - (weighted - 3.0) * 5.0, 5.0);
+}
+
+//+------------------------------------------------------------------+
+//| CalcAbsorptionAdj — detect zone being eaten by volume (P25b)     |
+//| Increasing volume across tests = zone weakening                   |
+//| Range: [-10, +5]                                                  |
+//+------------------------------------------------------------------+
+double CalcAbsorptionAdj(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   SReactionPoint &rp = g_rp_array[rp_index];
+
+   // Need at least 2 tests to compare volume trend
+   int tests_recorded = MathMin(rp.test_vol_index, 4);
+   if(tests_recorded < 2) return 0.0;
+
+   // Calculate volume trend direction across recorded tests
+   // Read in chronological order from circular buffer
+   double sum_early = 0.0;
+   double sum_late  = 0.0;
+   int    half      = tests_recorded / 2;
+
+   for(int j = 0; j < tests_recorded; j++)
+   {
+      // Chronological index: oldest first
+      int idx = (rp.test_vol_index - tests_recorded + j + 400) % 4;  // +400 to avoid negative modulo
+      double vol = rp.test_volumes[idx];
+      if(vol <= 0.0) return 0.0;
+
+      if(j < half)
+         sum_early += vol;
+      else
+         sum_late += vol;
+   }
+
+   if(sum_early <= 0.0) return 0.0;
+
+   double avg_early = sum_early / (double)half;
+   double avg_late  = sum_late / (double)(tests_recorded - half);
+   double change    = (avg_late - avg_early) / avg_early;
+
+   // Volume increasing > 50% across tests → zone being absorbed → DANGER
+   if(change > 0.50)
+      return -10.0;
+   // Volume increasing > 20% → moderate concern
+   if(change > 0.20)
+      return -5.0;
+   // Volume decreasing > 30% → sellers/buyers exhausting → zone holding strong
+   if(change < -0.30)
+      return 5.0;
+
+   return 0.0;
+}
+
+//+------------------------------------------------------------------+
 //| CalcBaseScore (0-100)                                             |
 //| ONLY called when g_rp_dirty[rp_index] == true                    |
 //| Uses cached values — no recalculation                            |
@@ -152,17 +272,8 @@ double CalcBaseScore(int rp_index)
    if(atr_pips < 0.1) atr_pips = 10.0; // Guard div by zero
    score += MathMin((rp.initial_reaction_pips / atr_pips) * 35.0, 35.0);
 
-   // 2. Test Count (max 20)
-   switch(rp.test_count)
-   {
-      case 0:  break;
-      case 1:  score += 5.0;  break;
-      case 2:  score += 12.0; break;
-      case 3:  score += 20.0; break;
-      default:
-         score += MathMax(20.0 - (rp.test_count - 3) * 5.0, 5.0);
-         break;
-   }
+   // 2. Test Quality (max 25, was max 20) — P25a: weighted by body vs wick
+   score += CalcTestQualityScore(rp_index);
 
    // 3. Candle Pattern (max 12) — confirmation only, not primary driver
    //    Pattern already saved in rp.candle_pattern at detect time
@@ -186,6 +297,9 @@ double CalcBaseScore(int rp_index)
 
    // BONUS: Volume Delta (can go negative)
    score += CalcVolumeDeltaBonus(rp_index);
+
+   // 7. Zone Precision (P24d): [-5, +13] — reward tight/refined zones
+   score += CalcZonePrecisionScore(rp_index);
 
    return MathMin(score, 100.0);
 }
@@ -211,6 +325,7 @@ void CalcFinalScore(int rp_index)
       + GetStructureScoreAdj(rp_index)                 // Module H: [-20, +15]
       + GetLiquiditySweepBonus(rp_index)               // Module H: [0, +20]
       + GetTrendAlignmentScore(rp.rp_type)             // Multi-TF: [-25, +20] (P20)
+      + CalcAbsorptionAdj(rp_index)                    // P25b: [-10, +5]
       + (rp.is_role_reversed ? 15.0 : 0.0)            // Role reversal bonus
       + ((rp.is_fresh && rp.test_count == 0) ? 10.0 : 0.0); // First touch bonus
 

@@ -28,6 +28,7 @@
 #include <ReactionPoint/RP_Drawing.mqh>
 #include <ReactionPoint/RP_Dashboard.mqh>
 #include <ReactionPoint/RP_Alerts.mqh>
+#include <ReactionPoint/RP_Logger.mqh>
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                  |
@@ -119,6 +120,10 @@ input ENUM_DASH_CORNER Dashboard_Corner       = DASH_TOP_LEFT; // Dashboard corn
 input int              Dashboard_Font_Size    = 9;       // Dashboard font size
 input int              Label_Font_Size        = 8;       // Zone label font size
 
+//--- Data Logger (P26)
+input bool   Enable_Logger                    = false;   // Log zone data to CSV for optimization
+input int    Outcome_Measure_Bars             = 20;      // Bars after test to measure reaction
+
 //--- Colors
 input color  Color_Premium                    = clrGold;
 input color  Color_Level1                     = clrCrimson;
@@ -170,6 +175,7 @@ void ApplyTFPreset()
    g_show_htf_2              = Show_HTF_2;
    g_show_dashboard          = Show_Dashboard;
    g_show_performance_stats  = Show_Performance_Stats;
+   g_use_logger              = Enable_Logger;
 
    //--- Clean mode: force-disable all UI clutter
    if(g_clean_chart_mode)
@@ -468,6 +474,11 @@ int OnInit()
    //--- 8. Timer for flash management
    EventSetTimer(1);
 
+   //--- 9. Init data logger (P26)
+   if(g_use_logger && !InitLogger())
+      Print("RP: Warning — Logger init failed, logging disabled");
+
+
    //--- 9. Reset state
    s_first_run       = true;
    s_last_news_check = 0;
@@ -589,6 +600,9 @@ int OnCalculate(const int rates_total,
    //--- Update opacity decay for all active RPs
    UpdateAllDecay();
 
+   //--- P26: Check pending outcomes for reaction measurement
+   CheckPendingOutcomes(Outcome_Measure_Bars);
+
    //── STEP 7: Confluence — only when RPs changed or breakout ──
    if(g_use_confluence_zones)
    {
@@ -653,6 +667,7 @@ int OnCalculate(const int rates_total,
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   DeinitLogger();  // P26: flush and close log files
 
    switch(reason)
    {
