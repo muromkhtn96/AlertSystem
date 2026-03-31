@@ -33,10 +33,15 @@ struct SPendingOutcome
    double   final_score;
    int      test_count_at_test;
    bool     is_active;
+   // Cached at registration time — avoids RP lookup at outcome measurement
+   ENUM_SESSION     session_formed;
+   ENUM_CANDLE_PATTERN candle_pattern;
+   bool             has_wick_filter;
+   int              strong_test_count;
+   int              weak_test_count;
 };
 
 SPendingOutcome g_pending_outcomes[];
-int             g_pending_count = 0;
 
 //+------------------------------------------------------------------+
 //| InitLogger — open CSV files with headers                          |
@@ -49,7 +54,6 @@ bool InitLogger()
    ArrayResize(g_pending_outcomes, MAX_PENDING_OUTCOMES);
    for(int i = 0; i < MAX_PENDING_OUTCOMES; i++)
       g_pending_outcomes[i].is_active = false;
-   g_pending_count = 0;
 
    string symbol = _Symbol;
    string tf_str = EnumToString(Period());
@@ -76,6 +80,7 @@ bool InitLogger()
    if(g_log_handle_tests == INVALID_HANDLE)
    {
       Print("RP_Logger: Failed to open tests log: ", GetLastError());
+      DeinitLogger();  // Cleanup already-opened handles
       return false;
    }
    FileWrite(g_log_handle_tests,
@@ -91,6 +96,7 @@ bool InitLogger()
    if(g_log_handle_outcomes == INVALID_HANDLE)
    {
       Print("RP_Logger: Failed to open outcomes log: ", GetLastError());
+      DeinitLogger();  // Cleanup already-opened handles
       return false;
    }
    FileWrite(g_log_handle_outcomes,
@@ -239,17 +245,20 @@ void RegisterPendingOutcome(const SReactionPoint &rp)
       slot = oldest;
    }
 
-   g_pending_outcomes[slot].rp_id            = rp.id;
-   g_pending_outcomes[slot].bar_tested       = Bars(_Symbol, PERIOD_CURRENT) - 1;
-   g_pending_outcomes[slot].zone_high        = rp.zone_high;
-   g_pending_outcomes[slot].zone_low         = rp.zone_low;
-   g_pending_outcomes[slot].test_price       = RP_Close(1);
-   g_pending_outcomes[slot].rp_type          = rp.rp_type;
-   g_pending_outcomes[slot].final_score      = rp.final_score;
+   g_pending_outcomes[slot].rp_id              = rp.id;
+   g_pending_outcomes[slot].bar_tested         = Bars(_Symbol, PERIOD_CURRENT) - 1;
+   g_pending_outcomes[slot].zone_high          = rp.zone_high;
+   g_pending_outcomes[slot].zone_low           = rp.zone_low;
+   g_pending_outcomes[slot].test_price         = RP_Close(1);
+   g_pending_outcomes[slot].rp_type            = rp.rp_type;
+   g_pending_outcomes[slot].final_score        = rp.final_score;
    g_pending_outcomes[slot].test_count_at_test = rp.test_count;
-   g_pending_outcomes[slot].is_active        = true;
-   if(g_pending_count < MAX_PENDING_OUTCOMES)
-      g_pending_count++;
+   g_pending_outcomes[slot].session_formed     = rp.session_formed;
+   g_pending_outcomes[slot].candle_pattern     = rp.candle_pattern;
+   g_pending_outcomes[slot].has_wick_filter    = rp.has_wick_filter;
+   g_pending_outcomes[slot].strong_test_count  = rp.strong_test_count;
+   g_pending_outcomes[slot].weak_test_count    = rp.weak_test_count;
+   g_pending_outcomes[slot].is_active          = true;
 }
 
 //+------------------------------------------------------------------+
@@ -269,18 +278,17 @@ void CheckPendingOutcomes(int measure_bars)
       int bars_elapsed = current_bar - g_pending_outcomes[i].bar_tested;
       if(bars_elapsed < measure_bars) continue;
 
-      //--- Measure max favorable and adverse move
+      //--- Measure max favorable and adverse move over N bars after test
       double max_favorable = 0.0;
       double max_adverse   = 0.0;
       int    bars_to_max   = 0;
 
+      // Bars after test: shift from current = bars_elapsed - j
+      // j=1 is the bar right after test, j=measure_bars is the last bar
       for(int j = 1; j <= measure_bars; j++)
       {
-         int bar_idx = current_bar - g_pending_outcomes[i].bar_tested - j;
-         if(bar_idx < 1) bar_idx = 1;
-         // Convert to actual bar shift from current
-         int shift = current_bar - (g_pending_outcomes[i].bar_tested + j);
-         if(shift < 1 || shift > current_bar) continue;
+         int shift = bars_elapsed - j;
+         if(shift < 1) continue;  // Anti-repainting: never use bar[0]
 
          double close_j = RP_Close(shift);
          if(close_j == 0.0) continue;
@@ -291,15 +299,21 @@ void CheckPendingOutcomes(int measure_bars)
          else
             move = g_pending_outcomes[i].test_price - close_j;
 
-         double move_pips = PriceToPips(MathAbs(move));
-
-         if(move > 0 && PriceToPips(move) > max_favorable)
+         if(move > 0.0)
          {
-            max_favorable = PriceToPips(move);
-            bars_to_max = j;
+            double fav_pips = PriceToPips(move);
+            if(fav_pips > max_favorable)
+            {
+               max_favorable = fav_pips;
+               bars_to_max = j;
+            }
          }
-         if(move < 0 && move_pips > max_adverse)
-            max_adverse = move_pips;
+         else if(move < 0.0)
+         {
+            double adv_pips = PriceToPips(-move);
+            if(adv_pips > max_adverse)
+               max_adverse = adv_pips;
+         }
       }
 
       //--- Classify outcome
@@ -314,28 +328,9 @@ void CheckPendingOutcomes(int measure_bars)
       else
          outcome = "NEUTRAL";           // No significant move either way
 
-      //--- Find the RP for additional data
-      string session_str = "N/A";
-      string regime_str  = EnumToString(g_current_regime);
-      string pattern_str = "N/A";
-      string wick_str    = "N";
-      int    strong_t    = 0;
-      int    weak_t      = 0;
+      //--- Use cached data — no RP lookup needed
       double zone_width  = PriceToPips(g_pending_outcomes[i].zone_high - g_pending_outcomes[i].zone_low);
       double width_ratio = (atr_pips > 0.0) ? zone_width / atr_pips : 0.0;
-
-      for(int k = 0; k < g_rp_count; k++)
-      {
-         if(g_rp_array[k].id == g_pending_outcomes[i].rp_id)
-         {
-            session_str = EnumToString(g_rp_array[k].session_formed);
-            pattern_str = EnumToString(g_rp_array[k].candle_pattern);
-            wick_str    = g_rp_array[k].has_wick_filter ? "Y" : "N";
-            strong_t    = g_rp_array[k].strong_test_count;
-            weak_t      = g_rp_array[k].weak_test_count;
-            break;
-         }
-      }
 
       FileWrite(g_log_handle_outcomes,
          TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES),
@@ -347,8 +342,12 @@ void CheckPendingOutcomes(int measure_bars)
          DoubleToString(max_adverse, 1),
          bars_to_max,
          outcome,
-         session_str, regime_str, pattern_str,
-         wick_str, strong_t, weak_t,
+         EnumToString(g_pending_outcomes[i].session_formed),
+         EnumToString(g_current_regime),
+         EnumToString(g_pending_outcomes[i].candle_pattern),
+         g_pending_outcomes[i].has_wick_filter ? "Y" : "N",
+         g_pending_outcomes[i].strong_test_count,
+         g_pending_outcomes[i].weak_test_count,
          DoubleToString(zone_width, 1),
          DoubleToString(width_ratio, 3));
 
