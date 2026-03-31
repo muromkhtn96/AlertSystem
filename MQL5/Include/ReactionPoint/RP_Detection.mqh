@@ -304,31 +304,38 @@ void DetectSwingPoints(int bars_to_scan)
    int limit = MathMin(bars_to_scan, available - g_swing_lookback - 1);
    int N = g_swing_lookback;
 
+   //--- Batch copy price data ONCE (replaces thousands of RP_High/RP_Low calls)
+   double highs[], lows[];
+   int copy_count = limit + N + 1;
+   int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, copy_count, highs);
+   int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, copy_count, lows);
+   if(copied_h <= 0 || copied_l <= 0) return;
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows, true);
+
+   int safe_limit = MathMin(limit, copied_h - N - 1);
+
    // Anti-repainting: start from N+1 (confirmed closed bars only)
-   for(int i = N + 1; i < limit; i++)
+   for(int i = N + 1; i < safe_limit; i++)
    {
-      double high_i = RP_High(i);
-      double low_i  = RP_Low(i);
+      double high_i = highs[i];
+      double low_i  = lows[i];
       if(high_i == 0.0 || low_i == 0.0) continue;
 
       // Check Swing High: high[i] > N bars left AND N bars right
       bool is_swing_high = true;
       for(int j = 1; j <= N; j++)
       {
-         double h_left  = RP_High(i + j);
-         double h_right = RP_High(i - j);
-         if(h_left == 0.0 || h_right == 0.0) { is_swing_high = false; break; }
-         if(high_i <= h_left || high_i <= h_right) { is_swing_high = false; break; }
+         if(high_i <= highs[i + j] || high_i <= highs[i - j])
+         { is_swing_high = false; break; }
       }
 
       // Check Swing Low: low[i] < N bars left AND N bars right
       bool is_swing_low = true;
       for(int j = 1; j <= N; j++)
       {
-         double l_left  = RP_Low(i + j);
-         double l_right = RP_Low(i - j);
-         if(l_left == 0.0 || l_right == 0.0) { is_swing_low = false; break; }
-         if(low_i >= l_left || low_i >= l_right) { is_swing_low = false; break; }
+         if(low_i >= lows[i + j] || low_i >= lows[i - j])
+         { is_swing_low = false; break; }
       }
 
       // Create Resistance RP from Swing High

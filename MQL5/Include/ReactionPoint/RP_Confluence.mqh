@@ -162,11 +162,14 @@ void MergeClusterZones()
    int total = 0;
    SPriceEntry entries[];
 
+   //--- Pre-allocate once (no per-iteration ArrayResize)
+   int max_entries = g_rp_count + g_htf_swing_count;
+   ArrayResize(entries, max_entries);
+
    //--- Add current TF active RPs
    for(int i = 0; i < g_rp_count; i++)
    {
       if(!g_rp_array[i].is_active) continue;
-      ArrayResize(entries, total + 1, 50);
       entries[total].price    = g_rp_array[i].price;
       entries[total].rp_index = i;
       entries[total].rp_type  = g_rp_array[i].rp_type;
@@ -177,7 +180,6 @@ void MergeClusterZones()
    //--- Add HTF swings (these are virtual — no rp_index)
    for(int i = 0; i < g_htf_swing_count; i++)
    {
-      ArrayResize(entries, total + 1, 50);
       entries[total].price    = g_htf_swing_cache[i].price;
       entries[total].rp_index = -1;
       entries[total].rp_type  = g_htf_swing_cache[i].rp_type;

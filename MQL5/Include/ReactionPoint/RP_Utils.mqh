@@ -126,6 +126,11 @@ int    g_structure_lookback_bars = 50;
 // Clean Chart Mode
 bool   g_clean_chart_mode           = true;
 
+// Pair detection (P22)
+bool   g_is_jpy_pair   = false;
+bool   g_is_gbp_pair   = false;
+bool   g_is_cross_pair = false;
+
 // Alerts
 bool   g_alert_only_active_sessions = true;
 
@@ -318,7 +323,15 @@ void UpdateFiboCache()
    int N = MathMin(g_swing_lookback, 3); // Smaller N for faster fibo swing detection
    if(lookback < N * 2 + 3) return;
 
-   //--- STEP 1: Find swing points in bars[1..lookback] (anti-repainting)
+   //--- STEP 1: Batch copy price data ONCE (replaces 540+ iHigh/iLow calls)
+   double highs[], lows[];
+   int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, lookback + 1, highs);
+   int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, lookback + 1, lows);
+   if(copied_h <= 0 || copied_l <= 0) return;
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows, true);
+
+   //--- Find swing points in bars[1..lookback] (anti-repainting)
    double swing_prices[];
    int    swing_bars[];
    int    swing_types[];   // 1=High, -1=Low
@@ -328,14 +341,15 @@ void UpdateFiboCache()
    ArrayResize(swing_bars,   MAX_FIBO_SWINGS);
    ArrayResize(swing_types,  MAX_FIBO_SWINGS);
 
-   for(int i = N + 1; i <= lookback - N && swing_count < MAX_FIBO_SWINGS; i++)
+   int scan_limit = MathMin(lookback - N, copied_h - 1);
+
+   for(int i = N + 1; i <= scan_limit && swing_count < MAX_FIBO_SWINGS; i++)
    {
       //--- Check swing high (use strict < to allow flat-topped swings)
       bool is_high = true;
       for(int j = 1; j <= N; j++)
       {
-         if(iHigh(_Symbol, PERIOD_CURRENT, i) < iHigh(_Symbol, PERIOD_CURRENT, i - j) ||
-            iHigh(_Symbol, PERIOD_CURRENT, i) < iHigh(_Symbol, PERIOD_CURRENT, i + j))
+         if(highs[i] < highs[i - j] || highs[i] < highs[i + j])
          {
             is_high = false;
             break;
@@ -346,8 +360,7 @@ void UpdateFiboCache()
       bool is_low = true;
       for(int j = 1; j <= N; j++)
       {
-         if(iLow(_Symbol, PERIOD_CURRENT, i) > iLow(_Symbol, PERIOD_CURRENT, i - j) ||
-            iLow(_Symbol, PERIOD_CURRENT, i) > iLow(_Symbol, PERIOD_CURRENT, i + j))
+         if(lows[i] > lows[i - j] || lows[i] > lows[i + j])
          {
             is_low = false;
             break;
@@ -356,14 +369,14 @@ void UpdateFiboCache()
 
       if(is_high)
       {
-         swing_prices[swing_count] = iHigh(_Symbol, PERIOD_CURRENT, i);
+         swing_prices[swing_count] = highs[i];
          swing_bars[swing_count]   = i;
          swing_types[swing_count]  = 1;
          swing_count++;
       }
       else if(is_low)
       {
-         swing_prices[swing_count] = iLow(_Symbol, PERIOD_CURRENT, i);
+         swing_prices[swing_count] = lows[i];
          swing_bars[swing_count]   = i;
          swing_types[swing_count]  = -1;
          swing_count++;
@@ -754,6 +767,74 @@ color BlendColor(color fg, color bg, int alpha_pct)
 color GetChartBackground()
 {
    return (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
+}
+
+//+------------------------------------------------------------------+
+//| DetectPairType — identify pair characteristics from symbol (P22)  |
+//+------------------------------------------------------------------+
+void DetectPairType()
+{
+   string symbol = _Symbol;
+
+   g_is_jpy_pair = (StringFind(symbol, "JPY") >= 0);
+   g_is_gbp_pair = (StringFind(symbol, "GBP") >= 0);
+
+   g_is_cross_pair = !(
+      StringFind(symbol, "EURUSD") >= 0 || StringFind(symbol, "GBPUSD") >= 0 ||
+      StringFind(symbol, "USDJPY") >= 0 || StringFind(symbol, "USDCHF") >= 0 ||
+      StringFind(symbol, "AUDUSD") >= 0 || StringFind(symbol, "USDCAD") >= 0 ||
+      StringFind(symbol, "NZDUSD") >= 0
+   );
+
+   Print("RP: Pair=", symbol,
+         " | JPY=", g_is_jpy_pair,
+         " | GBP=", g_is_gbp_pair,
+         " | Cross=", g_is_cross_pair);
+}
+
+//+------------------------------------------------------------------+
+//| ApplyVolatilityScaling — scale params by ATR ratio (P22)          |
+//| Called ONCE after first UpdateBarCache when ATR is available       |
+//+------------------------------------------------------------------+
+void ApplyVolatilityScaling()
+{
+   if(g_cached_atr14 <= 0.0) return;
+
+   //--- ATR baseline per TF (typical EURUSD values)
+   double atr_baseline;
+   ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
+
+   if(tf <= PERIOD_M30)      atr_baseline = PipsToPrice(15);
+   else if(tf <= PERIOD_H1)  atr_baseline = PipsToPrice(25);
+   else if(tf <= PERIOD_H4)  atr_baseline = PipsToPrice(50);
+   else                      atr_baseline = PipsToPrice(100);
+
+   if(atr_baseline <= 0.0) atr_baseline = PipsToPrice(25);
+
+   double ratio = g_cached_atr14 / atr_baseline;
+   ratio = MathMax(0.7, MathMin(ratio, 2.5)); // Clamp
+
+   //--- Scale distance parameters
+   g_min_rp_distance_pips   = (int)MathRound(g_min_rp_distance_pips * ratio);
+   g_min_reaction_move_pips = (int)MathRound(g_min_reaction_move_pips * ratio);
+   g_breakout_confirm_pips  = (int)MathRound(g_breakout_confirm_pips * ratio);
+   g_confluence_merge_pips  = (int)MathRound(g_confluence_merge_pips * ratio);
+   g_fibo_tolerance_pips    = (int)MathRound(g_fibo_tolerance_pips * ratio);
+   g_proximity_alert_pips   = (int)MathRound(g_proximity_alert_pips * ratio);
+   g_reset_alert_pips       = (int)MathRound(g_reset_alert_pips * ratio);
+   g_sl_buffer_pips         = (int)MathRound(g_sl_buffer_pips * ratio);
+
+   //--- Cross pairs: relax spread filter
+   if(g_is_cross_pair)
+   {
+      if(g_spread_alert_multiplier < 2.5) g_spread_alert_multiplier = 2.5;
+      if(g_spread_block_multiplier < 4.0) g_spread_block_multiplier = 4.0;
+   }
+
+   Print("RP: ATR ratio=", DoubleToString(ratio, 2),
+         " | MinDist=", g_min_rp_distance_pips,
+         " | BreakConf=", g_breakout_confirm_pips,
+         " | MergePips=", g_confluence_merge_pips);
 }
 
 #endif // RP_UTILS_MQH

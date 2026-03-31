@@ -447,11 +447,14 @@ int OnInit()
    for(int ti = 0; ti < 3; ti++)               // Init HTF trends
       g_htf_trends[ti].Init();
 
-   //--- 4. Init indicator handles (ADX, ATR)
+   //--- 4. Detect pair type (P22)
+   DetectPairType();
+
+   //--- 5. Init indicator handles (ADX, ATR)
    if(!InitIndicatorHandles())
       return INIT_FAILED;
 
-   //--- 5. Init stats
+   //--- 6. Init stats
    InitStats();
 
    //--- 6. Create dashboard (once)
@@ -522,6 +525,14 @@ int OnCalculate(const int rates_total,
    //── STEP 0: Cache & Revalidation ──
    UpdateBarCache();      // ATR14, Volume MA20, Fibo levels
    RevalidateHandles();   // Every 100 bars
+
+   //── STEP 0b: Volatility scaling — once on first run (P22) ──
+   static bool s_scaling_applied = false;
+   if(!s_scaling_applied && g_cached_atr14 > 0.0)
+   {
+      ApplyVolatilityScaling();
+      s_scaling_applied = true;
+   }
 
    //── STEP 1: Market Context ──
    UpdateCurrentSession();

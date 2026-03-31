@@ -2660,6 +2660,262 @@ LƯU Ý:
 
 ---
 
+## PROMPT 22: Pair-Adaptive Parameters (Sửa RP_Utils.mqh + RP_Session.mqh + RP_Main.mq5)
+
+```
+Thêm auto-scaling parameters dựa trên ATR + pair detection.
+Tối ưu cho GBPUSD và CADJPY nhưng hoạt động đúng trên mọi pair.
+
+MỤC ĐÍCH: Default preset tối ưu cho EURUSD (volatility thấp). Trên pair volatile
+(GBP, JPY crosses), các tham số khoảng cách/width quá nhỏ → zones dồn cục, false breakout.
+
+=== CONCEPT ===
+
+Thay vì hardcode preset per pair, dùng ATR ratio để auto-scale:
+  atr_ratio = ATR(14) hiện tại / ATR baseline (50 pips cho H4)
+  Nếu pair volatile hơn baseline → scale UP các tham số khoảng cách
+
+Kết hợp pair detection (từ symbol name) để điều chỉnh session scoring:
+  JPY cross → Asian session có ý nghĩa (giảm penalty)
+  GBP pair → London session quan trọng hơn (tăng bonus)
+
+=== THÊM FUNCTION MỚI (trong RP_Utils.mqh) ===
+
+1. ApplyVolatilityScaling():
+   - Gọi SAU UpdateBarCache() lần đầu (khi g_cached_atr14 đã có giá trị)
+   - Gọi MỘT LẦN trong OnCalculate khi first_run == true
+   
+   // ATR baseline theo TF (trung bình EURUSD)
+   double atr_baseline;
+   switch(Period()):
+     case PERIOD_M30: atr_baseline = PipsToPrice(15); break;
+     case PERIOD_H1:  atr_baseline = PipsToPrice(25); break;
+     case PERIOD_H4:  atr_baseline = PipsToPrice(50); break;
+     case PERIOD_D1:  atr_baseline = PipsToPrice(100); break;
+     default:         atr_baseline = PipsToPrice(25); break;
+   
+   double ratio = g_cached_atr14 / atr_baseline;
+   ratio = MathMax(0.7, MathMin(ratio, 2.5)); // Clamp [0.7, 2.5]
+   
+   // Scale distance parameters
+   g_min_rp_distance_pips    = (int)MathRound(g_min_rp_distance_pips * ratio);
+   g_min_reaction_move_pips  = (int)MathRound(g_min_reaction_move_pips * ratio);
+   g_breakout_confirm_pips   = (int)MathRound(g_breakout_confirm_pips * ratio);
+   g_confluence_merge_pips   = (int)MathRound(g_confluence_merge_pips * ratio);
+   g_fibo_tolerance_pips     = (int)MathRound(g_fibo_tolerance_pips * ratio);
+   g_proximity_alert_pips    = (int)MathRound(g_proximity_alert_pips * ratio);
+   g_reset_alert_pips        = (int)MathRound(g_reset_alert_pips * ratio);
+   g_sl_buffer_pips          = (int)MathRound(g_sl_buffer_pips * ratio);
+   
+   Print("RP: ATR ratio = ", DoubleToString(ratio, 2),
+         " | MinDist=", g_min_rp_distance_pips,
+         " | BreakConf=", g_breakout_confirm_pips);
+
+2. DetectPairType():
+   - Gọi trong OnInit, lưu kết quả vào globals
+   
+   string symbol = _Symbol;
+   
+   // Detect currency components
+   g_is_jpy_pair = (StringFind(symbol, "JPY") >= 0);
+   g_is_gbp_pair = (StringFind(symbol, "GBP") >= 0);
+   g_is_cross_pair = !( // Không phải major
+     StringFind(symbol, "EURUSD") >= 0 || StringFind(symbol, "GBPUSD") >= 0 ||
+     StringFind(symbol, "USDJPY") >= 0 || StringFind(symbol, "USDCHF") >= 0 ||
+     StringFind(symbol, "AUDUSD") >= 0 || StringFind(symbol, "USDCAD") >= 0 ||
+     StringFind(symbol, "NZDUSD") >= 0
+   );
+
+=== THÊM GLOBALS (RP_Utils.mqh) ===
+
+bool g_is_jpy_pair   = false;
+bool g_is_gbp_pair   = false;
+bool g_is_cross_pair = false;
+
+=== SỬA SESSION SCORING (RP_Session.mqh) ===
+
+GetSessionScoreAdj(ENUM_SESSION session):
+  // Thay bảng cố định bằng pair-adaptive:
+  
+  double adj = 0.0;
+  switch(session):
+    case SESSION_OVERLAP:    adj = 15.0; break;
+    case SESSION_LONDON_OPEN: adj = 10.0; break;
+    case SESSION_NY_OPEN:    adj = 10.0; break;
+    case SESSION_LONDON:     adj = 5.0;  break;
+    case SESSION_NY:         adj = 5.0;  break;
+    case SESSION_ASIAN:      adj = -10.0; break;
+    case SESSION_DEAD:       adj = -20.0; break;
+  
+  // Pair-specific adjustments:
+  if(g_is_gbp_pair):
+    if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London open
+    if(session == SESSION_LONDON)      adj += 3.0;
+  
+  if(g_is_jpy_pair):
+    if(session == SESSION_ASIAN) adj += 7.0;         // JPY active in Asian (-10 → -3)
+    if(session == SESSION_DEAD)  adj += 5.0;         // Less dead for JPY (-20 → -15)
+  
+  if(g_is_cross_pair):
+    if(session == SESSION_DEAD)  adj += 5.0;         // Crosses less session-dependent
+  
+  return adj;
+
+=== SỬA SPREAD FILTER (RP_SpreadFilter.mqh hoặc RP_Utils.mqh) ===
+
+Trong ApplyTFPreset hoặc ApplyVolatilityScaling:
+  // Cross pairs have wider spreads — relax thresholds
+  if(g_is_cross_pair):
+    g_spread_alert_multiplier = MathMax(g_spread_alert_multiplier, 2.5);
+    g_spread_block_multiplier = MathMax(g_spread_block_multiplier, 4.0);
+
+=== TÍCH HỢP VÀO MAIN ===
+
+OnInit():
+  DetectPairType();  // Sau ApplyTFPreset, trước InitIndicatorHandles
+
+OnCalculate (khi first_run == true, SAU UpdateBarCache):
+  static bool scaling_applied = false;
+  if(!scaling_applied && g_cached_atr14 > 0):
+    ApplyVolatilityScaling();
+    scaling_applied = true;
+
+LƯU Ý:
+- ApplyVolatilityScaling chỉ gọi 1 LẦN (không re-scale mỗi bar)
+- ratio clamp [0.7, 2.5]: pair ít volatile không bị scale quá nhỏ
+- Print log để trader biết ratio đang dùng
+- Spread filter nới cho cross pair — tránh block entry liên tục trên CADJPY
+- Session scoring vẫn giữ base values, chỉ thêm pair-specific bonus/reduction
+```
+
+---
+
+## PROMPT 23: Performance Optimization — Batch Copy & UI Efficiency (Sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
+
+```
+Tối ưu hiệu năng toàn bộ indicator: thay thế per-bar iHigh/iLow loops bằng batch
+CopyHigh/CopyLow, pre-allocate arrays, giảm object API calls.
+
+MỤC ĐÍCH: Giảm per-bar system calls từ ~1,200 xuống ~10. Chart mượt hơn, đặc biệt
+trên M30/H1 với nhiều bars.
+
+=== FIX 1: UpdateFiboCache — batch copy (RP_Utils.mqh) ===
+
+TRƯỚC: Gọi iHigh/iLow trong nested loop = ~540 calls/bar
+SAU: CopyHigh + CopyLow 1 lần, dùng array access
+
+void UpdateFiboCache():
+  // Thay vì iHigh(_Symbol, PERIOD_CURRENT, i) trong loop:
+  
+  // BATCH COPY tại đầu function:
+  double highs[], lows[];
+  int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, lookback + 1, highs);
+  int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, lookback + 1, lows);
+  if(copied_h <= 0 || copied_l <= 0) return;
+  ArraySetAsSeries(highs, true);
+  ArraySetAsSeries(lows, true);
+  
+  // Trong loop dùng highs[i], lows[i] thay vì iHigh/iLow:
+  int scan_limit = MathMin(lookback - N, copied_h - 1);
+  for(int i = N + 1; i <= scan_limit && swing_count < MAX_FIBO_SWINGS; i++):
+    // Swing high check:
+    if(highs[i] < highs[i - j] || highs[i] < highs[i + j]) ...
+    // Swing low check:
+    if(lows[i] > lows[i - j] || lows[i] > lows[i + j]) ...
+    // Save swing:
+    swing_prices[swing_count] = highs[i]; // hoặc lows[i]
+
+Kết quả: 540 system calls → 2 CopyHigh/CopyLow calls
+
+=== FIX 2: DetectSwingPoints — batch copy (RP_Detection.mqh) ===
+
+TRƯỚC: RP_High/RP_Low trong nested loop = ~9,900 calls (first run, 500 bars × N=5)
+SAU: CopyHigh + CopyLow 1 lần
+
+void DetectSwingPoints(int bars_to_scan):
+  int copy_count = limit + N + 1;
+  double highs[], lows[];
+  int copied_h = CopyHigh(_Symbol, PERIOD_CURRENT, 0, copy_count, highs);
+  int copied_l = CopyLow(_Symbol, PERIOD_CURRENT, 0, copy_count, lows);
+  if(copied_h <= 0 || copied_l <= 0) return;
+  ArraySetAsSeries(highs, true);
+  ArraySetAsSeries(lows, true);
+  
+  int safe_limit = MathMin(limit, copied_h - N - 1);
+  
+  for(int i = N + 1; i < safe_limit; i++):
+    double high_i = highs[i];
+    double low_i  = lows[i];
+    
+    // Swing high: dùng highs[i+j], highs[i-j] thay vì RP_High()
+    // Swing low:  dùng lows[i+j], lows[i-j] thay vì RP_Low()
+
+LƯU Ý: RP_High/RP_Low wrappers vẫn giữ cho các module khác dùng (bar đơn lẻ).
+DetectSwingPoints là trường hợp đặc biệt cần scan hàng trăm bars → batch copy hiệu quả hơn.
+
+Kết quả: 9,900 system calls → 2 CopyHigh/CopyLow calls
+
+=== FIX 3: MergeClusterZones — pre-allocate (RP_Confluence.mqh) ===
+
+TRƯỚC: ArrayResize(entries, total+1, 50) trong mỗi iteration = 50+ allocations
+SAU: Pre-allocate 1 lần
+
+void MergeClusterZones():
+  int max_entries = g_rp_count + g_htf_swing_count;
+  SPriceEntry entries[];
+  ArrayResize(entries, max_entries);  // 1 LẦN
+  int total = 0;
+  
+  // Loop: chỉ gán entries[total], KHÔNG ArrayResize
+  for(int i = 0; i < g_rp_count; i++):
+    if(!g_rp_array[i].is_active) continue;
+    entries[total].price = g_rp_array[i].price;
+    // ...
+    total++;
+
+Kết quả: 50+ allocations → 1 allocation
+
+=== FIX 4: DrawRPZone — lazy property update (RP_Drawing.mqh) ===
+
+TRƯỚC: Set 7 ObjectSet properties cho MỌI RP MỌI bar (600+ calls/bar)
+SAU: Set static properties 1 lần khi tạo, chỉ update dirty RPs
+
+void DrawRPZone(int rp_index):
+  if(ObjectFind(0, name) < 0):
+    ObjectCreate(...);
+    // SET STATIC PROPS ONCE: FILL, BACK, SELECTABLE, HIDDEN, STYLE
+  else:
+    // Chỉ update time_end (extend zone forward) — 1 call
+    ObjectSetInteger(0, name, OBJPROP_TIME, 1, time_end);
+  
+  // Color/price/style: CHỈ update khi g_rp_dirty[rp_index] == true
+  if(g_rp_dirty[rp_index]):
+    ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
+    ObjectSetDouble(0, name, OBJPROP_PRICE, 0, rp.zone_high);
+    ObjectSetDouble(0, name, OBJPROP_PRICE, 1, rp.zone_low);
+    // Update style nếu level thay đổi
+
+Kết quả: 7 calls × 100 RPs = 700 → 1 call × 100 RPs = 100 (khi không dirty)
+
+=== TỔNG KẾT HIỆU NĂNG ===
+
+| Metric          | Trước      | Sau       | Giảm   |
+|-----------------|------------|-----------|--------|
+| Per-bar calls   | ~1,200     | ~10       | 99%    |
+| First-run calls | ~10,500    | ~10       | 99%    |
+| Memory allocs   | 50+/bar    | 1/bar     | 98%    |
+| UI object calls | 700/bar    | 100/bar   | 86%    |
+
+LƯU Ý:
+- CopyHigh/CopyLow trả về dữ liệu đã buffered bởi terminal → rất nhanh
+- ArraySetAsSeries(true) bắt buộc sau Copy để index 0 = bar mới nhất
+- Anti-repainting vẫn đảm bảo: array index >= 1 (bar[0] không dùng)
+- Các module khác (CheckBreakoutsAndRetests, CalcRecentBonus) vẫn dùng
+  RP_Close/RP_High/RP_Low cho bar đơn lẻ — không cần batch
+```
+
+---
+
 ## THỨ TỰ THỰC THI TÓM TẮT
 
 ```
@@ -2697,6 +2953,16 @@ PHASE 5 — UI (cần Phase 4):
 
 PHASE 6 — Integration:
   P17: RP_Main.mq5          ← LÀM CUỐI CÙNG, tổng hợp tất cả
+
+PHASE 7 — Reliability + Performance (cần Phase 6):
+  P18: Rebalance Scoring Weights        (sửa RP_Scoring.mqh, RP_Detection.mqh)
+  P19: Fibonacci Swing-to-Swing         (sửa RP_Defines.mqh, RP_Utils.mqh, RP_Scoring.mqh)
+  P20: Multi-TF Trend Alignment         (sửa RP_Confluence.mqh, RP_Scoring.mqh, RP_EntrySetup.mqh, RP_Main.mq5)
+  P21: Dynamic Zone Width               (sửa RP_Detection.mqh)
+  P22: Pair-Adaptive Parameters         (sửa RP_Utils.mqh, RP_Session.mqh, RP_Main.mq5)
+  P23: Performance Optimization          (sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
+
+  P18+P19 song song → P20 → P21 → P22 → P23 (P23 làm cuối vì sửa nhiều file)
 ```
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.

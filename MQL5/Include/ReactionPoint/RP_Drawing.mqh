@@ -93,26 +93,37 @@ void DrawRPZone(int rp_index)
                    time_start, rp.zone_high,
                    time_end, rp.zone_low);
       g_object_count++;
+
+      //--- Static properties — set ONCE on creation only
+      ObjectSetInteger(0, name, OBJPROP_FILL, true);
+      ObjectSetInteger(0, name, OBJPROP_BACK, true);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
+
+      if(rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
+         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+      else
+         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
    }
    else
    {
-      ObjectSetInteger(0, name, OBJPROP_TIME, 0, time_start);
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 0, rp.zone_high);
+      //--- Only update time end (extends zone forward) and price if changed
       ObjectSetInteger(0, name, OBJPROP_TIME, 1, time_end);
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 1, rp.zone_low);
    }
 
-   ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
-   ObjectSetInteger(0, name, OBJPROP_FILL, true);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   //--- Update color only when opacity/score changed (detected by dirty flag)
+   if(g_rp_dirty[rp_index])
+   {
+      ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
+      ObjectSetDouble(0, name, OBJPROP_PRICE, 0, rp.zone_high);
+      ObjectSetDouble(0, name, OBJPROP_PRICE, 1, rp.zone_low);
 
-   //--- Border style
-   if(rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
-   else
-      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
+      if(rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
+         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+      else
+         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
+   }
 }
 
 //+------------------------------------------------------------------+
