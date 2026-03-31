@@ -35,6 +35,7 @@
 
 //--- Preset
 input ENUM_TF_PRESET TF_Preset               = PRESET_AUTO;
+input bool   Clean_Chart_Mode                 = true;     // Clean mode: zones only, no labels/dashboard/panels
 
 //--- Swing Detection
 input int    Swing_Lookback                   = 3;       // Swing lookback [1-10]
@@ -140,6 +141,9 @@ static int      s_last_bar_count  = 0;
 //+------------------------------------------------------------------+
 void ApplyTFPreset()
 {
+   //--- Clean Chart Mode — override display settings
+   g_clean_chart_mode = Clean_Chart_Mode;
+
    //--- Always copy non-preset inputs to globals first
    g_use_adaptive_reaction   = Use_Adaptive_Reaction;
    g_reaction_atr_multiplier = Reaction_ATR_Multiplier;
@@ -166,6 +170,15 @@ void ApplyTFPreset()
    g_show_htf_2              = Show_HTF_2;
    g_show_dashboard          = Show_Dashboard;
    g_show_performance_stats  = Show_Performance_Stats;
+
+   //--- Clean mode: force-disable all UI clutter
+   if(g_clean_chart_mode)
+   {
+      g_show_dashboard         = false;
+      g_show_entry_setup       = false;
+      g_show_session_background= false;
+      g_show_performance_stats = false;
+   }
    g_dashboard_corner        = Dashboard_Corner;
    g_dashboard_font_size     = Dashboard_Font_Size;
    g_label_font_size         = Label_Font_Size;

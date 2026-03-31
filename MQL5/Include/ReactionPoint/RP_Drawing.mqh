@@ -65,6 +65,10 @@ void DrawRPZone(int rp_index)
    SReactionPoint &rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
 
+   //--- Clean mode: only draw Premium + Level 1
+   if(g_clean_chart_mode && rp.rp_level != RP_PREMIUM && rp.rp_level != RP_LEVEL1)
+      return;
+
    string name = OBJECT_PREFIX + "ZONE_" + IntegerToString(rp.id);
 
    //--- Time range: from formed to future
@@ -632,7 +636,8 @@ void RedrawChangedRP()
       else if(rp.is_active)
       {
          DrawRPZone(i);
-         DrawRPLabel(i);
+         if(!g_clean_chart_mode)
+            DrawRPLabel(i);
       }
 
       //--- Update previous state
@@ -644,11 +649,15 @@ void RedrawChangedRP()
       g_prev_opacity[i]  = rp.display_opacity;
    }
 
-   //--- Redraw confluence glows
-   for(int z = 0; z < g_confluence_count; z++)
-      DrawConfluenceGlow(z);
+   //--- Redraw confluence glows (skip in clean mode)
+   if(!g_clean_chart_mode)
+   {
+      for(int z = 0; z < g_confluence_count; z++)
+         DrawConfluenceGlow(z);
+   }
 
-   //--- Redraw entry setups
+   //--- Redraw entry setups (skip in clean mode)
+   if(!g_clean_chart_mode)
    for(int s = 0; s < g_setup_count; s++)
    {
       if(g_setup_array[s].is_active)

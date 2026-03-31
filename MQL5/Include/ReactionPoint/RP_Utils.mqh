@@ -123,6 +123,9 @@ double g_spread_block_multiplier = 3.0;
 bool   g_use_market_structure    = true;
 int    g_structure_lookback_bars = 50;
 
+// Clean Chart Mode
+bool   g_clean_chart_mode           = true;
+
 // Alerts
 bool   g_alert_only_active_sessions = true;
 
