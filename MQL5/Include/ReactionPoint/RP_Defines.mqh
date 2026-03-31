@@ -164,6 +164,7 @@ struct SEntrySetup
    bool             is_active;
    bool             is_invalidated;
    bool             is_triggered;
+   bool             is_preferred;
 
    void Init()
    {
@@ -183,6 +184,7 @@ struct SEntrySetup
       is_active      = false;
       is_invalidated = false;
       is_triggered   = false;
+      is_preferred   = false;
    }
 };
 
