@@ -488,4 +488,109 @@ void HandlePartialBreakout(int rp_id)
    Print("WARNING: rp_id ", rp_id, " not found in any confluence zone");
 }
 
+//+------------------------------------------------------------------+
+//| UpdateHTFTrends — detect trend direction on all timeframes (P20) |
+//| Called per-bar in Main OnCalculate after UpdateMarketRegime       |
+//+------------------------------------------------------------------+
+void UpdateHTFTrends()
+{
+   if(!g_use_trend_alignment) return;
+
+   //--- Current TF — already detected by UpdateMarketRegime
+   g_htf_trends[0].tf           = (ENUM_TIMEFRAMES)Period();
+   g_htf_trends[0].trend        = g_current_trend;
+   g_htf_trends[0].is_valid     = true;
+   g_htf_trends[0].last_updated = TimeCurrent();
+
+   //--- HTF_1 and HTF_2
+   ENUM_TIMEFRAMES tfs[2];
+   tfs[0] = g_htf_1;
+   tfs[1] = g_htf_2;
+
+   for(int t = 0; t < 2; t++)
+   {
+      int idx = t + 1;
+      g_htf_trends[idx].tf = tfs[t];
+
+      double htf_close[];
+      int copied = CopyClose(_Symbol, tfs[t], 0, 21, htf_close);
+      if(copied < 21)
+      {
+         g_htf_trends[idx].is_valid = false;
+         continue;
+      }
+
+      ArraySetAsSeries(htf_close, true);
+
+      //--- Trend detection via price structure on closed bars[1..20]
+      bool up1   = htf_close[1]  > htf_close[10];
+      bool up2   = htf_close[10] > htf_close[20];
+      bool down1 = htf_close[1]  < htf_close[10];
+      bool down2 = htf_close[10] < htf_close[20];
+
+      if(up1 && up2)
+         g_htf_trends[idx].trend = TREND_UP;
+      else if(down1 && down2)
+         g_htf_trends[idx].trend = TREND_DOWN;
+      else
+         g_htf_trends[idx].trend = TREND_NONE;
+
+      g_htf_trends[idx].is_valid     = true;
+      g_htf_trends[idx].last_updated = TimeCurrent();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| GetTrendAlignmentScore — multi-TF trend agreement score (P20)    |
+//| Returns [-25, +20] based on how many TFs agree with RP direction |
+//+------------------------------------------------------------------+
+double GetTrendAlignmentScore(ENUM_RP_TYPE rp_type)
+{
+   if(!g_use_trend_alignment) return 0.0;
+
+   int aligned = 0;
+   int counter = 0;
+   int total   = 0;
+
+   for(int i = 0; i < 3; i++)
+   {
+      if(!g_htf_trends[i].is_valid) continue;
+      total++;
+
+      bool is_aligned;
+      if(rp_type == RP_SUPPORT)
+         is_aligned = (g_htf_trends[i].trend == TREND_UP || g_htf_trends[i].trend == TREND_NONE);
+      else // RP_RESISTANCE
+         is_aligned = (g_htf_trends[i].trend == TREND_DOWN || g_htf_trends[i].trend == TREND_NONE);
+
+      if(is_aligned) aligned++;
+      else counter++;
+   }
+
+   if(total == 0) return 0.0;
+
+   //--- All TFs agree
+   if(aligned == total) return 20.0;
+
+   //--- 2 out of 3 aligned
+   if(aligned >= total - 1) return 10.0;
+
+   //--- Counter-trend
+   double penalty = (counter == total) ? -25.0 : -15.0;
+
+   //--- CHoCH exception: reduce penalty 50% if recent structure change
+   if(g_choch_detected && g_last_choch_bar <= 10)
+      penalty *= 0.5;
+
+   return penalty;
+}
+
+//+------------------------------------------------------------------+
+//| IsTrendAligned — simple boolean check for entry filter (P20)     |
+//+------------------------------------------------------------------+
+bool IsTrendAligned(ENUM_RP_TYPE rp_type)
+{
+   return GetTrendAlignmentScore(rp_type) >= 0.0;
+}
+
 #endif // RP_CONFLUENCE_MQH

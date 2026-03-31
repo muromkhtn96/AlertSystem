@@ -382,6 +382,13 @@ void CheckEntryConditions()
       if(g_news_blackout)
          continue;
 
+      //--- f) Trend alignment (P20) — exception: Premium score >= 110
+      if(g_use_trend_alignment && !IsTrendAligned(rp.rp_type))
+      {
+         if(rp.final_score < 110.0)
+            continue;
+      }
+
       //--- Check if setup already exists for this RP
       bool already_exists = false;
       for(int s = 0; s < g_setup_count; s++)

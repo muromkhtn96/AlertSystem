@@ -2138,6 +2138,428 @@ PRESET_AUTO: Period()<=M30→M30, <=H1→H1, <=H4→H4, else→D1
 ---
 ---
 
+## PHASE 7: RELIABILITY UPGRADES (P18, P19, P20 — cải thiện xác suất tín hiệu)
+
+### Dependency Graph bổ sung
+```
+Phase 7: P18 (scoring) + P19 (fibo) song song → P20 (trend alignment, cần P18+P19)
+Tất cả cần Phase 1-6 đã hoàn thành.
+```
+
+---
+
+## PROMPT 18: Rebalance Scoring Weights (Sửa RP_Scoring.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Scoring.mqh — Rebalance trọng số Base Score.
+
+MỤC ĐÍCH: Trọng số hiện tại quá "phẳng" — candle pattern (20) gần bằng reaction strength (25).
+Trader kinh nghiệm coi reaction strength là yếu tố quan trọng nhất (institutional interest),
+trong khi candle pattern chỉ là confirmation thứ yếu. Volume cũng cần tăng tầm quan trọng.
+
+=== THAY ĐỔI TRỌNG SỐ BASE SCORE ===
+
+| Component         | Cũ  | Mới  | Lý do                                           |
+|-------------------|-----|------|--------------------------------------------------|
+| Reaction Strength | 25  | 35   | Yếu tố #1 — reaction mạnh = institutional money |
+| Test Count        | 20  | 20   | Giữ nguyên — logic diminishing returns tốt       |
+| Candle Pattern    | 20  | 12   | Chỉ là confirmation, không phải driver           |
+| Fibonacci         | 15  | 10   | Giảm — sẽ chính xác hơn sau P19 (swing-to-swing)|
+| Volume            | 10  | 15   | Tăng — volume confirmation quan trọng hơn pattern|
+| Round Number      | 10  | 8    | Giảm nhẹ — ít impact thực tế                    |
+| Volume Delta      | ±5  | ±5   | Giữ nguyên                                       |
+| TỔNG MAX          | 105 | 105  | Giữ tổng không đổi, cap vẫn = 100               |
+
+=== CHI TIẾT SỬA ===
+
+1. CalcBaseScore(int rp_index): sửa các hệ số
+
+   a) Reaction Strength (max 35, cũ 25):
+      score += MathMin((rp.initial_reaction_pips / atr_pips) * 35.0, 35.0)
+
+   b) Candle Pattern (max 12, cũ 20):
+      PINBAR=12, ENGULFING=10, OUTSIDE_BAR=8, LARGE_WICK=6, NONE=0
+
+   c) Fibonacci Alignment (max 10, cũ 15):
+      618 → 10, 500 → 7, 382 → 4
+
+   d) Volume (max 15, cũ 10):
+      >1.5x MA20 → 15, >1.2x MA20 → 8, else → 0
+
+   e) Round Number (max 8, cũ 10):
+      <= 10 pips → 8, <= 20 pips → 4, else → 0
+
+   f) Test Count, Volume Delta: KHÔNG ĐỔI
+
+2. CalcFibonacciScore(double price): sửa return values
+   618 → return 10.0 (cũ 15.0)
+   500 → return 7.0  (cũ 10.0)
+   382 → return 4.0  (cũ 7.0)
+
+3. CalcVolumeScore(int bar_shift): sửa return values
+   >1.5x → return 15.0 (cũ 10.0)
+   >1.2x → return 8.0  (cũ 5.0)
+
+4. RoundNumberScore(double price): sửa return values
+   <= 10 pips → return 8.0  (cũ 10.0)
+   <= 20 pips → return 4.0  (cũ 5.0)
+
+5. GetCandlePatternScore() (nếu tồn tại trong RP_Detection.mqh):
+   Cập nhật tương ứng: PINBAR=12, ENGULFING=10, OUTSIDE_BAR=8, LARGE_WICK=6
+
+KHÔNG SỬA: CalcFinalScore, các module adjustments, SCORE_CAP.
+CalcBaseScore cap vẫn = MathMin(score, 100.0)
+```
+
+---
+
+## PROMPT 19: Fibonacci Swing-to-Swing Engine (Sửa RP_Utils.mqh)
+
+```
+Sửa file MQL5/Include/ReactionPoint/RP_Utils.mqh — Thay thế UpdateFiboCache() bằng
+Fibonacci Swing-to-Swing engine chính xác hơn.
+
+MỤC ĐÍCH: Fibo hiện tại tìm high/low TUYỆT ĐỐI trong N bars lookback → vô nghĩa về
+mặt technical analysis. Fibo chỉ có ý nghĩa khi tính TỪ một swing leg hoàn chỉnh
+(swing high → swing low hoặc ngược lại).
+
+=== CONCEPT ===
+
+Swing Leg = một chuyển động giá rõ ràng từ swing point A đến swing point B.
+Fibonacci retracement chỉ valid khi:
+1. Leg đã hoàn thành (swing B confirmed bằng N bars)
+2. Giá đang retrace (quay lại) chứ không extend
+3. Leg đủ lớn (>= 2x ATR) để có ý nghĩa
+
+Ví dụ Uptrend:
+  Swing Low (A) → Swing High (B) = completed leg
+  Fibo 38.2%, 50%, 61.8% tính từ B xuống A = buy-the-dip levels
+
+Ví dụ Downtrend:
+  Swing High (A) → Swing Low (B) = completed leg
+  Fibo 38.2%, 50%, 61.8% tính từ B lên A = sell-the-rally levels
+
+=== THÊM STRUCT VÀ GLOBALS (trong RP_Utils.mqh) ===
+
+// Thêm vào RP_Defines.mqh hoặc đầu RP_Utils.mqh (trước UpdateFiboCache)
+struct SFiboLeg {
+   double    swing_a_price;    // Điểm bắt đầu leg
+   double    swing_b_price;    // Điểm kết thúc leg
+   int       swing_a_bar;      // Bar index swing A
+   int       swing_b_bar;      // Bar index swing B
+   bool      is_bullish_leg;   // true = A(low)→B(high), false = A(high)→B(low)
+   bool      is_valid;         // true nếu leg >= 2*ATR và confirmed
+   double    fibo_382;         // Level 38.2%
+   double    fibo_500;         // Level 50.0%
+   double    fibo_618;         // Level 61.8%
+   double    fibo_786;         // Level 78.6% (thêm mới — institutional level)
+   void Init() { ZeroMemory(this); }
+};
+
+#define MAX_FIBO_LEGS 3
+SFiboLeg g_fibo_legs[];       // ArrayResize(MAX_FIBO_LEGS) trong OnInit
+int      g_fibo_leg_count = 0;
+
+// GIỮ LẠI g_cached_fibo_618/500/382 cho backward compatibility
+// Nhưng giá trị giờ lấy từ fibo leg GẦN NHẤT (leg[0])
+
+=== THAY THẾ UpdateFiboCache() ===
+
+void UpdateFiboCache():
+  // STEP 1: Tìm swing points trong lookback
+  int lookback = MathMin(g_fibo_lookback_bars, Bars(_Symbol, PERIOD_CURRENT) - 1);
+  if(lookback < 10) return;
+  int N = MathMin(g_swing_lookback, 3); // N nhỏ hơn cho fibo swing detection
+  
+  // Tìm swing highs/lows trong bars[1..lookback] — anti-repainting
+  // Lưu max 6 swing points gần nhất, sắp theo bar index tăng dần (gần nhất = index nhỏ)
+  #define MAX_FIBO_SWINGS 6
+  double swing_prices[MAX_FIBO_SWINGS];
+  int    swing_bars[MAX_FIBO_SWINGS];
+  int    swing_types[MAX_FIBO_SWINGS]; // 1=High, -1=Low
+  int    swing_count = 0;
+  
+  for(int i = N + 1; i <= lookback - N && swing_count < MAX_FIBO_SWINGS; i++):
+    // Check swing high
+    bool is_high = true;
+    for(int j = 1; j <= N; j++):
+      if(iHigh(_Symbol, PERIOD_CURRENT, i) <= iHigh(_Symbol, PERIOD_CURRENT, i-j) ||
+         iHigh(_Symbol, PERIOD_CURRENT, i) <= iHigh(_Symbol, PERIOD_CURRENT, i+j)):
+        is_high = false; break;
+    
+    // Check swing low
+    bool is_low = true;
+    for(int j = 1; j <= N; j++):
+      if(iLow(_Symbol, PERIOD_CURRENT, i) >= iLow(_Symbol, PERIOD_CURRENT, i-j) ||
+         iLow(_Symbol, PERIOD_CURRENT, i) >= iLow(_Symbol, PERIOD_CURRENT, i+j)):
+        is_low = false; break;
+    
+    if(is_high):
+      swing_prices[swing_count] = iHigh(_Symbol, PERIOD_CURRENT, i);
+      swing_bars[swing_count] = i;
+      swing_types[swing_count] = 1;
+      swing_count++;
+    elif(is_low):
+      swing_prices[swing_count] = iLow(_Symbol, PERIOD_CURRENT, i);
+      swing_bars[swing_count] = i;
+      swing_types[swing_count] = -1;
+      swing_count++;
+  
+  if(swing_count < 2):
+    // Không đủ swing → reset cache
+    g_fibo_leg_count = 0;
+    g_cached_fibo_618 = 0.0;
+    g_cached_fibo_500 = 0.0;
+    g_cached_fibo_382 = 0.0;
+    return;
+  
+  // STEP 2: Xây dựng fibo legs từ swing pairs liền kề
+  g_fibo_leg_count = 0;
+  double current = RP_Close(1);
+  
+  for(int i = 0; i < swing_count - 1 && g_fibo_leg_count < MAX_FIBO_LEGS; i++):
+    // Chỉ ghép cặp swing types khác nhau (High+Low hoặc Low+High)
+    if(swing_types[i] == swing_types[i+1]) continue;
+    
+    double a_price = swing_prices[i+1]; // Swing cũ hơn = start
+    double b_price = swing_prices[i];   // Swing mới hơn = end
+    int    a_bar   = swing_bars[i+1];
+    int    b_bar   = swing_bars[i];
+    
+    double leg_size = MathAbs(b_price - a_price);
+    
+    // FILTER: Leg >= 2x ATR
+    if(leg_size < g_cached_atr14 * 2.0) continue;
+    
+    // FILTER: Price đang retrace, không extend
+    bool is_bullish = (b_price > a_price);
+    if(is_bullish):
+      if(current >= b_price || current <= a_price) continue;
+    else:
+      if(current <= b_price || current >= a_price) continue;
+    
+    // Build fibo leg
+    SFiboLeg leg;
+    leg.Init();
+    leg.swing_a_price  = a_price;
+    leg.swing_b_price  = b_price;
+    leg.swing_a_bar    = a_bar;
+    leg.swing_b_bar    = b_bar;
+    leg.is_bullish_leg = is_bullish;
+    leg.is_valid       = true;
+    
+    double range = MathAbs(b_price - a_price);
+    if(is_bullish):
+      leg.fibo_382 = b_price - range * 0.382;
+      leg.fibo_500 = b_price - range * 0.500;
+      leg.fibo_618 = b_price - range * 0.618;
+      leg.fibo_786 = b_price - range * 0.786;
+    else:
+      leg.fibo_382 = b_price + range * 0.382;
+      leg.fibo_500 = b_price + range * 0.500;
+      leg.fibo_618 = b_price + range * 0.618;
+      leg.fibo_786 = b_price + range * 0.786;
+    
+    g_fibo_legs[g_fibo_leg_count] = leg;
+    g_fibo_leg_count++;
+  
+  // STEP 3: Update backward-compatible cache từ leg[0]
+  if(g_fibo_leg_count > 0):
+    g_cached_fibo_618  = g_fibo_legs[0].fibo_618;
+    g_cached_fibo_500  = g_fibo_legs[0].fibo_500;
+    g_cached_fibo_382  = g_fibo_legs[0].fibo_382;
+    g_cached_fibo_high = MathMax(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
+    g_cached_fibo_low  = MathMin(g_fibo_legs[0].swing_a_price, g_fibo_legs[0].swing_b_price);
+  else:
+    g_cached_fibo_618 = 0.0;
+    g_cached_fibo_500 = 0.0;
+    g_cached_fibo_382 = 0.0;
+    g_cached_fibo_high = 0.0;
+    g_cached_fibo_low  = 0.0;
+
+=== SỬA CalcFibonacciScore() (RP_Scoring.mqh) ===
+
+double CalcFibonacciScore(double price):
+  double best_score = 0.0;
+  double tolerance = PipsToPrice(g_fibo_tolerance_pips);
+  bool   found_in_another_leg = false;
+  
+  for(int i = 0; i < g_fibo_leg_count; i++):
+    if(!g_fibo_legs[i].is_valid) continue;
+    double score = 0.0;
+    
+    if(MathAbs(price - g_fibo_legs[i].fibo_618) <= tolerance)      score = 10.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_786) <= tolerance) score = 8.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_500) <= tolerance) score = 7.0;
+    else if(MathAbs(price - g_fibo_legs[i].fibo_382) <= tolerance) score = 4.0;
+    
+    // Fibo confluence: RP trùng level từ 2+ legs → +3
+    if(score > 0.0 && found_in_another_leg) score += 3.0;
+    if(score > 0.0) found_in_another_leg = true;
+    
+    if(score > best_score) best_score = score;
+  
+  return MathMin(best_score, 13.0); // Cap: 10 base + 3 confluence bonus
+
+=== THAY ĐỔI TRONG OnInit (RP_Main.mq5) ===
+
+Thêm: ArrayResize(g_fibo_legs, MAX_FIBO_LEGS);
+
+LƯU Ý:
+- Anti-repainting: chỉ dùng bars[1..N]
+- Performance: tính 1 lần/bar, max 6 swing points scan
+- Backward compatible: g_cached_fibo_* vẫn hoạt động
+```
+
+---
+
+## PROMPT 20: Multi-TF Trend Alignment Filter (Sửa RP_Confluence.mqh + RP_Scoring.mqh)
+
+```
+Sửa RP_Confluence.mqh, RP_Scoring.mqh, RP_EntrySetup.mqh, RP_Main.mq5 — Thêm Multi-TF
+Trend Alignment filter.
+
+MỤC ĐÍCH: Kiểm tra trend direction alignment giữa current TF + HTF_1 + HTF_2.
+RP SUPPORT trong uptrend trên tất cả TFs = high probability.
+RP SUPPORT counter-trend trên tất cả TFs = extremely risky.
+
+=== THÊM GLOBALS (trong RP_Utils.mqh) ===
+
+struct SHTFTrend {
+   ENUM_TIMEFRAMES  tf;
+   ENUM_TREND_DIR   trend;
+   bool             is_valid;
+   datetime         last_updated;
+   void Init() { ZeroMemory(this); }
+};
+
+SHTFTrend g_htf_trends[3];        // [0]=current TF, [1]=HTF_1, [2]=HTF_2
+bool      g_use_trend_alignment = true;
+
+=== THÊM FUNCTIONS (trong RP_Confluence.mqh, sau ApplyConfluenceScoring) ===
+
+1. UpdateHTFTrends():
+   - Gọi per-bar trong Main OnCalculate, STEP 1 (sau UpdateMarketRegime)
+   
+   // Current TF — đã có sẵn
+   g_htf_trends[0].tf    = Period();
+   g_htf_trends[0].trend = g_current_trend;
+   g_htf_trends[0].is_valid = true;
+   g_htf_trends[0].last_updated = TimeCurrent();
+   
+   // HTF_1 và HTF_2
+   ENUM_TIMEFRAMES tfs[2] = {g_htf_1, g_htf_2};
+   for(int t = 0; t < 2; t++):
+     int idx = t + 1;
+     g_htf_trends[idx].tf = tfs[t];
+     
+     double htf_close[];
+     int copied = CopyClose(_Symbol, tfs[t], 0, 21, htf_close);
+     if(copied < 21):
+       g_htf_trends[idx].is_valid = false;
+       continue;
+     
+     ArraySetAsSeries(htf_close, true);
+     
+     // Trend detection: HH+HL vs LH+LL trên 20 bars
+     // Đơn giản: so sánh close[1] vs close[10] vs close[20]
+     bool up1   = htf_close[1] > htf_close[10];
+     bool up2   = htf_close[10] > htf_close[20];
+     bool down1 = htf_close[1] < htf_close[10];
+     bool down2 = htf_close[10] < htf_close[20];
+     
+     if(up1 && up2)        g_htf_trends[idx].trend = TREND_UP;
+     else if(down1 && down2) g_htf_trends[idx].trend = TREND_DOWN;
+     else                    g_htf_trends[idx].trend = TREND_NONE;
+     
+     g_htf_trends[idx].is_valid = true;
+     g_htf_trends[idx].last_updated = TimeCurrent();
+
+2. GetTrendAlignmentScore(ENUM_RP_TYPE rp_type): double
+   - if(!g_use_trend_alignment) return 0.0;
+   
+   int aligned = 0, counter = 0, total = 0;
+   
+   for(int i = 0; i < 3; i++):
+     if(!g_htf_trends[i].is_valid) continue;
+     total++;
+     
+     bool is_aligned;
+     if(rp_type == RP_SUPPORT):
+       is_aligned = (g_htf_trends[i].trend == TREND_UP || g_htf_trends[i].trend == TREND_NONE);
+     else:
+       is_aligned = (g_htf_trends[i].trend == TREND_DOWN || g_htf_trends[i].trend == TREND_NONE);
+     
+     if(is_aligned) aligned++; else counter++;
+   
+   if(total == 0) return 0.0;
+   
+   if(aligned == total)     return 20.0;   // Tất cả đồng thuận
+   if(aligned >= total - 1) return 10.0;   // 2/3 aligned
+   
+   double penalty = (counter == total) ? -25.0 : -15.0;
+   
+   // CHoCH exception: giảm penalty 50% nếu vừa có CHoCH
+   if(g_choch_detected && g_last_choch_bar <= 10)
+     penalty *= 0.5;
+   
+   return penalty;
+
+3. IsTrendAligned(ENUM_RP_TYPE rp_type): bool
+   - return GetTrendAlignmentScore(rp_type) >= 0.0;
+
+=== TÍCH HỢP VÀO CalcFinalScore (RP_Scoring.mqh) ===
+
+double adjusted = rp.base_score
+   + GetRegimeScoreAdj(rp.rp_type)
+   - CalcDecayPenalty(rp_index)
+   + CalcRecentBonus(rp_index)
+   + GetSessionScoreAdj(rp.session_formed)
+   + GetDayOfWeekAdj()
+   + GetStructureScoreAdj(rp_index)
+   + GetLiquiditySweepBonus(rp_index)
+   + GetTrendAlignmentScore(rp.rp_type)    // ← THÊM MỚI: [-25, +20]
+   + (rp.is_role_reversed ? 15.0 : 0.0)
+   + ((rp.is_fresh && rp.test_count == 0) ? 10.0 : 0.0);
+
+=== TÍCH HỢP VÀO CheckEntryConditions (RP_EntrySetup.mqh) ===
+
+Thêm filter (f) sau các check hiện tại:
+  // f) Trend alignment
+  if(g_use_trend_alignment && !IsTrendAligned(rp.rp_type)):
+    if(rp.final_score < 110) continue; // Skip — counter-trend without premium
+    // Premium (>=110): vẫn cho phép entry counter-trend
+
+=== TÍCH HỢP VÀO OnCalculate (RP_Main.mq5) ===
+
+// STEP 1 — sau UpdateMarketRegime():
+if(g_use_trend_alignment)
+   UpdateHTFTrends();
+
+=== INPUT MỚI (RP_Main.mq5) ===
+
+// TREND ALIGNMENT
+input bool Use_Trend_Alignment = true;
+
+ApplyTFPreset: g_use_trend_alignment = Use_Trend_Alignment;
+
+=== DASHBOARD (RP_Dashboard.mqh) ===
+
+// Thêm dòng sau REGIME:
+// "TREND   CTF:↑  H4:↑  D1:→   ALIGNED"     (clrLime)
+// "TREND   CTF:↑  H4:↓  D1:↓   COUNTER ⚠"   (clrTomato)
+string GetTrendArrow(ENUM_TREND_DIR t):
+  if(t == TREND_UP) return "↑";
+  if(t == TREND_DOWN) return "↓";
+  return "→";
+
+LƯU Ý:
+- Performance: CopyClose 21 bars × 2 TFs = rất nhẹ, 1 lần/bar
+- Anti-repainting: detect trend trên closed bars[1..20]
+- CHoCH exception: reversal play hợp lệ khi structure vừa đổi
+- Premium exception: score >=110 vẫn cho phép entry counter-trend
+```
+
 ## THỨ TỰ THỰC THI TÓM TẮT
 
 ```

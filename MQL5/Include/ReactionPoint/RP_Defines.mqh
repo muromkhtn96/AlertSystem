@@ -33,6 +33,8 @@ enum ENUM_STRUCTURE_STATE   { STRUCTURE_BULLISH, STRUCTURE_BEARISH, STRUCTURE_NO
 #define MAX_HTF_RETRIES    3
 #define OBJECT_PREFIX      "RP_"
 #define SCORE_CAP          150.0
+#define MAX_FIBO_LEGS      3
+#define MAX_FIBO_SWINGS    6
 
 //+------------------------------------------------------------------+
 //| Anti-repainting shift guard                                      |
@@ -214,6 +216,56 @@ struct SRPStats
    {
       ZeroMemory(this);
       tracking_start = TimeCurrent();
+   }
+};
+
+//+------------------------------------------------------------------+
+//| SFiboLeg — Fibonacci swing-to-swing leg                         |
+//+------------------------------------------------------------------+
+struct SFiboLeg
+{
+   double    swing_a_price;    // Start of leg (older swing)
+   double    swing_b_price;    // End of leg (newer swing)
+   int       swing_a_bar;      // Bar index of swing A
+   int       swing_b_bar;      // Bar index of swing B
+   bool      is_bullish_leg;   // true = Low→High, false = High→Low
+   bool      is_valid;         // true if leg >= 2*ATR and confirmed
+   double    fibo_382;         // 38.2% retracement level
+   double    fibo_500;         // 50.0% retracement level
+   double    fibo_618;         // 61.8% retracement level
+   double    fibo_786;         // 78.6% retracement level (institutional)
+
+   void Init()
+   {
+      swing_a_price = 0.0;
+      swing_b_price = 0.0;
+      swing_a_bar   = 0;
+      swing_b_bar   = 0;
+      is_bullish_leg= false;
+      is_valid      = false;
+      fibo_382      = 0.0;
+      fibo_500      = 0.0;
+      fibo_618      = 0.0;
+      fibo_786      = 0.0;
+   }
+};
+
+//+------------------------------------------------------------------+
+//| SHTFTrend — Higher timeframe trend cache                         |
+//+------------------------------------------------------------------+
+struct SHTFTrend
+{
+   ENUM_TIMEFRAMES  tf;
+   ENUM_TREND_DIR   trend;
+   bool             is_valid;
+   datetime         last_updated;
+
+   void Init()
+   {
+      tf           = PERIOD_CURRENT;
+      trend        = TREND_NONE;
+      is_valid     = false;
+      last_updated = 0;
    }
 };
 

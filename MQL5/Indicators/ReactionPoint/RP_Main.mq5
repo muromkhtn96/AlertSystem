@@ -21,8 +21,8 @@
 #include <ReactionPoint/RP_SpreadFilter.mqh>
 #include <ReactionPoint/RP_Detection.mqh>
 #include <ReactionPoint/RP_MarketStructure.mqh>
-#include <ReactionPoint/RP_Scoring.mqh>
 #include <ReactionPoint/RP_Confluence.mqh>
+#include <ReactionPoint/RP_Scoring.mqh>
 #include <ReactionPoint/RP_EntrySetup.mqh>
 #include <ReactionPoint/RP_Stats.mqh>
 #include <ReactionPoint/RP_Drawing.mqh>
@@ -98,6 +98,9 @@ input double Spread_Block_Multiplier          = 3.0;     // Spread block thresho
 input bool   Use_Market_Structure             = true;    // Enable BOS/CHoCH
 input int    Structure_Lookback_Bars          = 50;      // Structure lookback [20-100]
 
+//--- Trend Alignment (Phase 7 — P20)
+input bool   Use_Trend_Alignment              = true;    // Multi-TF trend alignment filter
+
 //--- Multi-Timeframe
 input bool             Show_HTF_1             = true;    // Show HTF 1
 input ENUM_TIMEFRAMES  HTF_1                  = PERIOD_H4;  // Higher TF 1
@@ -158,6 +161,7 @@ void ApplyTFPreset()
    g_spread_alert_multiplier = Spread_Alert_Multiplier;
    g_spread_block_multiplier = Spread_Block_Multiplier;
    g_use_market_structure    = Use_Market_Structure;
+   g_use_trend_alignment     = Use_Trend_Alignment;
    g_show_htf_1              = Show_HTF_1;
    g_show_htf_2              = Show_HTF_2;
    g_show_dashboard          = Show_Dashboard;
@@ -422,8 +426,13 @@ int OnInit()
    ArrayResize(g_setup_array, MAX_SETUPS);
    ArrayResize(g_rp_dirty, MAX_RP_COUNT);
    ArrayResize(g_last_calc_bar, MAX_RP_COUNT);
+   ArrayResize(g_fibo_legs, MAX_FIBO_LEGS);    // Phase 7 — P19
    ArrayInitialize(g_rp_dirty, true);      // Force first calc
    ArrayInitialize(g_last_calc_bar, -1);
+   for(int fi = 0; fi < MAX_FIBO_LEGS; fi++)   // Init fibo legs
+      g_fibo_legs[fi].Init();
+   for(int ti = 0; ti < 3; ti++)               // Init HTF trends
+      g_htf_trends[ti].Init();
 
    //--- 4. Init indicator handles (ADX, ATR)
    if(!InitIndicatorHandles())
@@ -504,6 +513,8 @@ int OnCalculate(const int rates_total,
    //── STEP 1: Market Context ──
    UpdateCurrentSession();
    UpdateMarketRegime();
+   if(g_use_trend_alignment)
+      UpdateHTFTrends();       // Phase 7 — P20: Multi-TF trend detection
 
    //── STEP 2: News Filter (throttled — every 5 minutes) ──
    if(g_use_news_filter)
