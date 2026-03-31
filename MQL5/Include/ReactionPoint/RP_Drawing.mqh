@@ -257,10 +257,10 @@ string GetLevelIcon(ENUM_RP_LEVEL level)
    // Use BMP-safe symbols instead:
    switch(level)
    {
-      case RP_PREMIUM: return ShortToString(0x2605); // ★ (U+2605)
-      case RP_LEVEL1:  return ShortToString(0x25CF); // ● (U+25CF)
-      case RP_LEVEL2:  return ShortToString(0x25C6); // ◆ (U+25C6)
-      case RP_LEVEL3:  return ShortToString(0x25CB); // ○ (U+25CB)
+      case RP_PREMIUM: return "PREMIUM";
+      case RP_LEVEL1:  return "LV1";
+      case RP_LEVEL2:  return "LV2";
+      case RP_LEVEL3:  return "LV3";
       default:         return " ";
    }
 }
@@ -280,16 +280,7 @@ void DrawRPLabel(int rp_index)
    //--- Position: center of zone vertically, right edge of zone horizontally
    double label_price = (rp.zone_high + rp.zone_low) / 2.0;
 
-   //--- Build label text
-   //    Line 1: [icon] [score] [progress_bar] [TYPE]
-   string type_str = rp.is_confluence ? "CONFLUENCE" :
-                     (rp.rp_type == RP_SUPPORT ? "SUPPORT" : "RESISTANCE");
-   string progress = BuildProgressBar(rp.final_score, 12);
-   string line1 = GetLevelIcon(rp.rp_level) + " " +
-                  DoubleToString(rp.final_score, 0) + " " +
-                  progress + " " + type_str;
-
-   //    Line 2: [TF] | Tested:[n]x | [session] | [status]
+   //--- Build label text: [icon] [score] | [TF] | Tested:[n]x | [status]
    string status_str;
    if(rp.is_role_reversed)
       status_str = "RoleRev";
@@ -297,18 +288,19 @@ void DrawRPLabel(int rp_index)
       status_str = "Fresh";
    else if(rp.display_opacity < 99.0)
    {
-      //--- Show decay amount: Decay:-N (estimated from opacity drop)
       int decay_pct = (int)MathRound(100.0 - rp.display_opacity);
       status_str = "Decay:-" + IntegerToString(decay_pct);
    }
    else
       status_str = "Active";
 
-   string line2 = TFToString(rp.source_tf) + " | Tested:" +
-                  IntegerToString(rp.test_count) + "x | " +
-                  SessionToString(rp.session_formed) + " | " + status_str;
+   string type_str = rp.is_confluence ? "CONFLUENCE" :
+                     (rp.rp_type == RP_SUPPORT ? "SUPPORT" : "RESISTANCE");
 
-   string full_text = line1 + "\n" + line2;
+   string full_text = GetLevelIcon(rp.rp_level) + " | " + type_str + " " +
+                      DoubleToString(rp.final_score, 0) + " | " +
+                      TFToString(rp.source_tf) + " | Tested:" +
+                      IntegerToString(rp.test_count) + "x | " + status_str;
 
    //--- Create or update text object — right edge of zone (current time)
    datetime label_time = TimeCurrent();
