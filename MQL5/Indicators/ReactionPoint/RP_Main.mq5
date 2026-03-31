@@ -114,6 +114,8 @@ input int              Zone_Width_Pips        = 4;       // Zone width in pips
 input int              Min_Score_To_Show      = 40;      // Min score to display
 input bool             Show_Dashboard         = true;    // Show dashboard
 input bool             Show_Performance_Stats = true;    // Show hit rate stats
+input bool             Enable_System_Alert    = false;   // Enable Alert() popup
+input bool             Enable_Push_Notify     = false;   // Enable push notification
 input int              Proximity_Alert_Pips   = 20;      // Proximity alert distance
 input int              Reset_Alert_Pips       = 30;      // Alert reset distance
 input ENUM_DASH_CORNER Dashboard_Corner       = DASH_TOP_LEFT; // Dashboard corner
@@ -162,6 +164,8 @@ void ApplyTFPreset()
    g_use_confluence_zones    = Use_Confluence_Zones;
    g_utc_offset              = UTC_Offset;
    g_alert_only_active_sessions = Alert_Only_Active_Sessions;
+   g_enable_system_alert        = Enable_System_Alert;
+   g_enable_push_notify         = Enable_Push_Notify;
    g_show_session_background = Show_Session_Background;
    g_use_news_filter         = Use_News_Filter;
    g_news_blackout_minutes   = News_Blackout_Minutes;
