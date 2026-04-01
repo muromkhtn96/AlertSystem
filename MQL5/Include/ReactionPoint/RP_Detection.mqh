@@ -131,6 +131,80 @@ bool CheckMomentumConfirmation(int swing_bar, ENUM_RP_TYPE rp_type, double &reac
 }
 
 //+------------------------------------------------------------------+
+//| P29: Find Order Block candle near swing point                     |
+//| OB = last opposite-direction candle before impulse move           |
+//| Returns bar index of OB candle, or -1 if not found                |
+//+------------------------------------------------------------------+
+int FindOrderBlockBar(int swing_bar, ENUM_RP_TYPE rp_type, int max_scan = 5)
+{
+   // Scan from swing_bar backward (increasing bar index = older in time)
+   // For demand (support): find last BEARISH candle before bullish impulse
+   // For supply (resistance): find last BULLISH candle before bearish impulse
+
+   int limit = MathMin(swing_bar + max_scan, Bars(_Symbol, PERIOD_CURRENT) - 2);
+
+   for(int i = swing_bar; i <= limit; i++)
+   {
+      if(i < RP_SHIFT_MIN) continue;  // Anti-repainting guard
+
+      double o_i = iOpen(_Symbol, PERIOD_CURRENT, i);
+      double c_i = iClose(_Symbol, PERIOD_CURRENT, i);
+      double h_i = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double l_i = iLow(_Symbol, PERIOD_CURRENT, i);
+
+      if(o_i == 0.0 || c_i == 0.0 || h_i == l_i) continue;
+
+      double range_i = h_i - l_i;
+      double body_i  = MathAbs(o_i - c_i);
+
+      // Skip doji (body < 30% range) — not a valid OB
+      if(body_i < range_i * 0.30) continue;
+
+      bool is_bullish_candle = (c_i > o_i);
+
+      // Check candle direction matches OB requirement
+      bool direction_ok = false;
+      if(rp_type == RP_SUPPORT && !is_bullish_candle)   // Demand OB = bearish candle
+         direction_ok = true;
+      if(rp_type == RP_RESISTANCE && is_bullish_candle)  // Supply OB = bullish candle
+         direction_ok = true;
+
+      if(!direction_ok) continue;
+
+      // Verify impulse: the candle AFTER this one (bar index i-1, newer in time)
+      // must be a strong move in the zone direction
+      int impulse_bar = i - 1;
+      if(impulse_bar < RP_SHIFT_MIN) continue;
+
+      double o_imp = iOpen(_Symbol, PERIOD_CURRENT, impulse_bar);
+      double c_imp = iClose(_Symbol, PERIOD_CURRENT, impulse_bar);
+      if(o_imp == 0.0 || c_imp == 0.0) continue;
+
+      double impulse_body = MathAbs(c_imp - o_imp);
+
+      bool impulse_ok = false;
+      if(rp_type == RP_SUPPORT)
+      {
+         // Impulse must be bullish and body >= 100% of OB body
+         // (tighter threshold reduces false OB on small candles)
+         if(c_imp > o_imp && impulse_body >= body_i)
+            impulse_ok = true;
+      }
+      else
+      {
+         // Impulse must be bearish and body >= 100% of OB body
+         if(c_imp < o_imp && impulse_body >= body_i)
+            impulse_ok = true;
+      }
+
+      if(impulse_ok)
+         return i;
+   }
+
+   return -1;  // No valid OB found — caller uses fallback
+}
+
+//+------------------------------------------------------------------+
 //| Evict an RP slot when array is full                               |
 //| Priority: 1) inactive, 2) lowest score non-confluence, 3) oldest |
 //+------------------------------------------------------------------+
@@ -214,29 +288,47 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    rp.rp_type              = rp_type;
    rp.price                = price;
 
-   //--- Dynamic zone width from actual candle at swing point (P21)
-   double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, bar_index);
-   double bar_close = iClose(_Symbol, PERIOD_CURRENT, bar_index);
-   double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, bar_index);
-   double bar_low   = iLow(_Symbol, PERIOD_CURRENT, bar_index);
+   //--- P29: Order Block detection — find OB candle, fallback to swing candle
+   int ob_bar = FindOrderBlockBar(bar_index, rp_type, 5);
+   int zone_bar = (ob_bar >= RP_SHIFT_MIN) ? ob_bar : bar_index;
 
-   if(rp_type == RP_SUPPORT)
+   double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_close = iClose(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_low   = iLow(_Symbol, PERIOD_CURRENT, zone_bar);
+
+   if(ob_bar >= RP_SHIFT_MIN)
    {
-      rp.zone_low  = bar_low;
-      rp.zone_high = MathMax(bar_open, bar_close);
+      // OB found: zone = body range of OB candle (institutional standard)
+      rp.zone_high       = MathMax(bar_open, bar_close);
+      rp.zone_low        = MathMin(bar_open, bar_close);
+      rp.is_order_block  = true;
+      rp.ob_bar_index    = ob_bar;
    }
-   else // RP_RESISTANCE
+   else
    {
-      rp.zone_high = bar_high;
-      rp.zone_low  = MathMin(bar_open, bar_close);
+      // Fallback: swing candle structure (P21 logic)
+      if(rp_type == RP_SUPPORT)
+      {
+         rp.zone_low  = bar_low;
+         rp.zone_high = MathMax(bar_open, bar_close);
+      }
+      else // RP_RESISTANCE
+      {
+         rp.zone_high = bar_high;
+         rp.zone_low  = MathMin(bar_open, bar_close);
+      }
+      rp.is_order_block  = false;
+      rp.ob_bar_index    = -1;
    }
 
    //--- P24a: Wick Ratio Filter — trim zone when wick dominates candle
    //    When wick >= 60% of range, zone focuses on the 30% nearest the reaction edge
    //    Uses bar_range as basis (not body_size) to avoid ultra-thin zones on pinbars
+   //    P29: Skip wick filter for OB zones — OB body range IS the zone by definition
    double bar_range   = bar_high - bar_low;
 
-   if(bar_range > 0.0)
+   if(bar_range > 0.0 && !rp.is_order_block)
    {
       double body_top    = MathMax(bar_open, bar_close);
       double body_bottom = MathMin(bar_open, bar_close);

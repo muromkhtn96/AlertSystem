@@ -186,8 +186,11 @@ void DrawRPZone(int rp_index)
       ObjectSetInteger(0, name_bot, OBJPROP_TIME, 1, time_end);
    }
 
-   //--- Update visual properties when dirty
-   if(g_rp_dirty[rp_index])
+   //--- Update visual properties when state changed
+   //    NOTE: g_rp_dirty may be cleared by scoring before drawing runs.
+   //    RedrawChangedRP() already tracks state changes via g_prev_* arrays,
+   //    so we always update properties when this function is called (it's
+   //    only called when RedrawChangedRP detects a change).
    {
       // Fill
       ObjectSetInteger(0, name_fill, OBJPROP_COLOR, fill_color);
@@ -502,6 +505,11 @@ void RedrawChangedRP()
    if(!g_draw_state_initialized)
       InitDrawState();
 
+   //--- Extend time_end for all active zones every call (lightweight)
+   //    This ensures zones always reach current candle + 20 bars ahead,
+   //    even when no state change triggers a full redraw.
+   datetime extend_end = TimeCurrent() + PeriodSeconds() * 20;
+
    for(int i = 0; i < g_rp_count; i++)
    {
       SReactionPoint rp = g_rp_array[i];
@@ -515,20 +523,35 @@ void RedrawChangedRP()
       if(g_prev_role_rev[i] != rp.is_role_reversed) changed = true;
       if(MathAbs(g_prev_opacity[i] - rp.display_opacity) > 1.0) changed = true;
 
-      if(!changed) continue;
-
       //--- RP became inactive → delete its objects
       if(!rp.is_active && g_prev_active[i])
       {
          DeleteRPObjects(rp.id);
+         changed = true;  // Force state update
       }
       else if(rp.is_active)
       {
-         DrawRPZone(i);
-         //--- Always draw labels for Premium + Level1; others only in full mode
-         if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-            DrawRPLabel(i);
+         if(changed)
+         {
+            //--- Full redraw: color, edges, prices, time
+            DrawRPZone(i);
+            if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
+               DrawRPLabel(i);
+         }
+         else
+         {
+            //--- Lightweight: only extend zone time_end forward
+            string id_str = IntegerToString(rp.id);
+            string nf = OBJECT_PREFIX + "ZONE_"   + id_str;
+            string nt = OBJECT_PREFIX + "EDGE_H_" + id_str;
+            string nb = OBJECT_PREFIX + "EDGE_L_" + id_str;
+            if(ObjectFind(0, nf) >= 0) ObjectSetInteger(0, nf, OBJPROP_TIME, 1, extend_end);
+            if(ObjectFind(0, nt) >= 0) ObjectSetInteger(0, nt, OBJPROP_TIME, 1, extend_end);
+            if(ObjectFind(0, nb) >= 0) ObjectSetInteger(0, nb, OBJPROP_TIME, 1, extend_end);
+         }
       }
+
+      if(!changed) continue;
 
       //--- Update previous state
       g_prev_scores[i]   = rp.final_score;

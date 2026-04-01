@@ -129,7 +129,7 @@ bool InitLogger()
          "timestamp", "rp_id", "type", "price", "zone_high", "zone_low",
          "zone_width_pips", "atr14_pips", "width_atr_ratio",
          "pattern", "reaction_pips", "volume_ratio",
-         "session", "regime", "has_wick_filter",
+         "session", "regime", "has_wick_filter", "is_order_block",
          "base_score", "final_score", "level");
    }
 
@@ -222,6 +222,7 @@ void LogZoneCreated(const SReactionPoint &rp)
       EnumToString(rp.session_formed),
       EnumToString(g_current_regime),
       rp.has_wick_filter ? "Y" : "N",
+      rp.is_order_block ? "Y" : "N",
       DoubleToString(rp.base_score, 1),
       DoubleToString(rp.final_score, 1),
       EnumToString(rp.rp_level));

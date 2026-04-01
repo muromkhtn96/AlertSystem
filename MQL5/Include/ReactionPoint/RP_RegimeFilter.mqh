@@ -94,10 +94,24 @@ double GetRegimeScoreAdj(ENUM_RP_TYPE rp_type)
    switch(g_current_regime)
    {
       case REGIME_STRONG_TREND:
-         return same_dir ? 20.0 : -30.0;
+         if(same_dir) return 20.0;
+         // Counter-trend: CHoCH reduces penalty (structure may be reversing)
+         if(g_choch_detected && g_last_choch_bar <= 5)
+            return -10.0;   // Fresh CHoCH: mild penalty instead of -30
+         if(g_choch_detected && g_last_choch_bar <= 15)
+         {
+            // Gradual fade: -10 (bar 6) → -30 (bar 15)
+            double fade = -10.0 - (double)(g_last_choch_bar - 5) / 10.0 * 20.0;
+            return fade;
+         }
+         return -30.0;
 
       case REGIME_WEAK_TREND:
-         return same_dir ? 10.0 : -15.0;
+         if(same_dir) return 10.0;
+         // Counter-trend with CHoCH: reduce from -15 to -5
+         if(g_choch_detected && g_last_choch_bar <= 10)
+            return -5.0;
+         return -15.0;
 
       case REGIME_RANGING:
          return 15.0;  // Both directions get +15

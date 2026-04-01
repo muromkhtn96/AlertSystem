@@ -187,20 +187,20 @@ void UpdateDashboard()
    row++;
 
    //=== METRICS ROW: ATR  Spread  News ===
+   //    Each metric on its own label for independent coloring (no overlay overlap)
    double atr_pips = PriceToPips(g_cached_atr14);
-   string metrics = "ATR " + DoubleToString(atr_pips, 1) + "p" +
-                    "   Sprd " + DoubleToString(g_current_spread_pips, 1) + "p" +
-                    "   News " + g_news_status_text;
-   DashLabel(OBJECT_PREFIX + "DASH_R3", x, y + row * DASH_ROW_HEIGHT,
-             metrics, DASH_DIM_COLOR, fs - 1);
-   row++;
-
-   //--- Colored overlay for spread + news status
    color spread_clr = GetSpreadColor(g_current_spread_pips, g_average_spread_pips);
-   DashLabel(OBJECT_PREFIX + "DASH_R3S", x + 100, y + (row-1) * DASH_ROW_HEIGHT,
-             DoubleToString(g_current_spread_pips, 1) + "p", spread_clr, fs - 1);
-   DashLabel(OBJECT_PREFIX + "DASH_R3N", x + 240, y + (row-1) * DASH_ROW_HEIGHT,
-             g_news_status_text, g_news_status_color, fs - 1);
+
+   //--- Char width estimate: Consolas at fs-1 ≈ (fs-1) * 0.6 per character
+   int cw = (int)MathMax(((fs - 1) * 6) / 10, 5);  // char width in pixels
+
+   DashLabel(OBJECT_PREFIX + "DASH_R3A", x, y + row * DASH_ROW_HEIGHT,
+             "ATR " + DoubleToString(atr_pips, 1) + "p", DASH_DIM_COLOR, fs - 1);
+   DashLabel(OBJECT_PREFIX + "DASH_R3S", x + 14 * cw, y + row * DASH_ROW_HEIGHT,
+             "Sprd " + DoubleToString(g_current_spread_pips, 1) + "p", spread_clr, fs - 1);
+   DashLabel(OBJECT_PREFIX + "DASH_R3N", x + 28 * cw, y + row * DASH_ROW_HEIGHT,
+             "News " + g_news_status_text, g_news_status_color, fs - 1);
+   row++;
 
    //=== THIN SEPARATOR ===
    DashLabel(OBJECT_PREFIX + "DASH_SEP2", x, y + row * DASH_ROW_HEIGHT,

@@ -78,6 +78,8 @@ struct SReactionPoint
    int              day_of_week_formed;
    bool             has_liquidity_sweep;
    bool             has_wick_filter;       // P24d: true if wick ratio filter trimmed zone
+   bool             is_order_block;        // P29: true if zone derived from Order Block detection
+   int              ob_bar_index;          // P29: bar index of OB candle (-1 if not found)
    int              strong_test_count;     // P25a: body rejection tests (high quality)
    int              weak_test_count;       // P25a: wick-only touch tests (low quality)
    double           test_volumes[4];       // P25b: tick volume at last 4 tests (circular)
@@ -117,6 +119,8 @@ struct SReactionPoint
       day_of_week_formed   = 0;
       has_liquidity_sweep  = false;
       has_wick_filter      = false;
+      is_order_block       = false;
+      ob_bar_index         = -1;
       strong_test_count    = 0;
       weak_test_count      = 0;
       ArrayInitialize(test_volumes, 0.0);

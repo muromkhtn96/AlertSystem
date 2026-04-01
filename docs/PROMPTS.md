@@ -3670,7 +3670,237 @@ PHASE 7 — Reliability + Performance (cần Phase 6):
 
   P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
   P28 chạy cuối cùng — UI cần tất cả logic hoạt động đúng trước khi tinh chỉnh visual
+
+PHASE 8 — Zone Detection Quality (target: top 1%):
+  P29: Order Block Zone Boundaries     (sửa RP_Defines.mqh, RP_Detection.mqh, RP_Logger.mqh)
+  P30: Multi-Candle Base Detection     (sửa RP_Detection.mqh)
+  P31: FVG / Imbalance Detection       (tạo RP_FVG.mqh, sửa RP_Defines.mqh, RP_Scoring.mqh)
+  P32: Adaptive Swing Lookback         (sửa RP_Detection.mqh, RP_Utils.mqh)
+  P33: Volume-Weighted Zone Center     (sửa RP_Detection.mqh)
+
+  P29 → P30 → P31 → P32 → P33
+  P29 là nền tảng — thay đổi cách xác định zone boundary, các bước sau refine thêm
 ```
+
+---
+
+## PHASE 8: ZONE DETECTION QUALITY ENHANCEMENT
+
+> **Mục tiêu**: Nâng chất lượng xác định vùng zone từ "solid conventional" lên "institutional-grade".
+> Hiện tại zone dùng swing candle trực tiếp — Phase 8 chuyển sang Order Block + multi-candle base,
+> đây là cách các institutional trader và SMC/ICT framework xác định S/D zones.
+
+---
+
+## PROMPT 29: Order Block Zone Boundaries (P29)
+
+```
+Cải thiện zone boundary trong RP_Detection.mqh bằng Order Block detection.
+
+=== CONTEXT ===
+Hiện tại CreateRP() dùng swing candle (bar tạo swing point) để tính zone_high/zone_low.
+Vấn đề: swing candle thường là nến reaction (pinbar/engulfing), KHÔNG phải nến tạo order flow.
+
+Order Block = nến cuối cùng NGƯỢC HƯỚNG trước impulse move:
+- Demand OB (support): nến bearish cuối trước impulse tăng → body range = demand zone
+- Supply OB (resistance): nến bullish cuối trước impulse giảm → body range = supply zone
+
+Đây là cách institutional traders xác định S/D zones — chính xác hơn dùng swing candle.
+
+=== THAY ĐỔI RP_Defines.mqh ===
+
+Thêm vào SReactionPoint (sau has_wick_filter):
+   bool  is_order_block;       // P29: true nếu zone derived từ OB detection
+   int   ob_bar_index;         // P29: bar index của OB candle (-1 nếu không tìm thấy)
+
+Thêm Init():
+   is_order_block   = false;
+   ob_bar_index     = -1;
+
+=== THÊM FUNCTION vào RP_Detection.mqh ===
+
+Thêm trước CreateRP():
+
+int FindOrderBlockBar(int swing_bar, ENUM_RP_TYPE rp_type, int max_scan)
+{
+   // Scan từ swing_bar trở về trước (bar index tăng = thời gian cũ hơn)
+   // Tìm nến NGƯỢC HƯỚNG cuối cùng trước impulse move
+   //
+   // Support (demand): tìm nến bearish (close < open)
+   // Resistance (supply): tìm nến bullish (close > open)
+   //
+   // Điều kiện OB hợp lệ:
+   //   1. Nến ngược hướng (bearish cho demand, bullish cho supply)
+   //   2. Body >= 30% range (không phải doji)
+   //   3. Nến tiếp theo (bar index nhỏ hơn) phải là impulse cùng hướng với zone
+   //
+   // max_scan = 5 bars (default), không scan quá xa
+   // Return bar index của OB, hoặc -1 nếu không tìm thấy
+
+   Scan logic:
+   for i = swing_bar to swing_bar + max_scan:
+     - Lấy open, close, high, low của bar[i]
+     - Check body >= 30% range (loại doji)
+     - Check hướng nến:
+       * Support: close < open (bearish)
+       * Resistance: close > open (bullish)
+     - Verify impulse: bar[i-1] phải di chuyển mạnh đúng hướng
+       * Support: close[i-1] > open[i-1] AND (close[i-1] - open[i-1]) >= body[i] * 0.5
+       * Resistance: close[i-1] < open[i-1] AND (open[i-1] - close[i-1]) >= body[i] * 0.5
+     - Nếu pass → return i
+   
+   return -1;  // Fallback: dùng logic hiện tại
+}
+
+=== SỬA CreateRP() ===
+
+Thay thế block zone boundary hiện tại (lines "Dynamic zone width from actual candle"):
+
+   //--- P29: Order Block detection — tìm OB candle trước, fallback swing candle
+   int ob_bar = FindOrderBlockBar(bar_index, rp_type, 5);
+   int zone_bar = (ob_bar >= RP_SHIFT_MIN) ? ob_bar : bar_index;
+   
+   double bar_open  = iOpen(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_close = iClose(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_high  = iHigh(_Symbol, PERIOD_CURRENT, zone_bar);
+   double bar_low   = iLow(_Symbol, PERIOD_CURRENT, zone_bar);
+   
+   //--- OB style: zone = body range of OB candle
+   //    Non-OB fallback: giữ logic cũ (swing candle body + wick)
+   if(ob_bar >= RP_SHIFT_MIN)
+   {
+      // OB found: zone = body range only (institutional standard)
+      rp.zone_high = MathMax(bar_open, bar_close);
+      rp.zone_low  = MathMin(bar_open, bar_close);
+      rp.is_order_block = true;
+      rp.ob_bar_index   = ob_bar;
+   }
+   else
+   {
+      // Fallback: swing candle (giữ logic hiện tại P21)
+      if(rp_type == RP_SUPPORT)
+      {
+         rp.zone_low  = bar_low;
+         rp.zone_high = MathMax(bar_open, bar_close);
+      }
+      else
+      {
+         rp.zone_high = bar_high;
+         rp.zone_low  = MathMin(bar_open, bar_close);
+      }
+      rp.is_order_block = false;
+      rp.ob_bar_index   = -1;
+   }
+
+   // Wick filter (P24a) VẪN ÁP DỤNG sau OB detection
+   // ATR cap (P24b) VẪN ÁP DỤNG sau OB detection
+
+=== SỬA RP_Logger.mqh ===
+
+LogZoneCreated: thêm cột is_order_block (true/false) vào CSV header và data line.
+
+=== LƯU Ý ===
+- Anti-repainting: FindOrderBlockBar chỉ scan bar >= RP_SHIFT_MIN
+- OB detection là BỔ SUNG, không thay thế — nếu không tìm thấy OB thì fallback logic cũ
+- Wick filter + ATR cap vẫn chạy TRÊN KẾT QUẢ OB (pipeline không đổi)
+- Scoring, confluence, alerts KHÔNG cần sửa — chúng đọc zone_high/zone_low
+```
+
+---
+
+## PROMPT 30: Multi-Candle Base Detection (P30)
+
+```
+Mở rộng zone boundary bằng multi-candle base detection.
+
+=== CONTEXT ===
+P29 dùng 1 OB candle cho zone. P30 mở rộng: nếu 2-3 nến liên tiếp tại swing point
+tạo consolidation (body overlap), dùng range tổng hợp thay vì 1 nến.
+
+Institutional zones thường là "base" — vùng tích lũy nhỏ trước impulse, không phải 1 nến.
+
+=== THÊM FUNCTION ===
+
+void ExpandZoneWithBase(SReactionPoint &rp, int zone_bar, int max_base_candles = 3)
+{
+   // Scan 1-2 nến adjacent (zone_bar ± 1) tìm body overlap
+   // Nếu body overlap >= 50% zone width → mở rộng zone bao trùm
+   // Nếu không overlap → giữ nguyên zone 1 candle
+   //
+   // Chỉ expand TRONG giới hạn ATR cap (không vượt max_width)
+}
+
+=== GỌI TRONG CreateRP() ===
+Sau khi tính zone_high/zone_low (từ OB hoặc fallback), gọi:
+   ExpandZoneWithBase(rp, zone_bar, 3);
+Trước khi chạy wick filter + ATR cap.
+```
+
+---
+
+## PROMPT 31: FVG / Imbalance Detection (P31)
+
+```
+Thêm Fair Value Gap detection để refine zone edges.
+
+=== CONTEXT ===
+FVG = khoảng trống giữa high[i+1] và low[i-1] (3-candle pattern).
+Nếu FVG nằm gần zone → zone edge co lại hoặc mở rộng để bao trùm FVG.
+FVG chưa được fill = vùng price chưa cân bằng → xác suất reaction cao hơn.
+
+=== TẠO RP_FVG.mqh ===
+- DetectFVG(): scan bars tìm FVG (gap > 0.5 * ATR)
+- bool IsFVGNearZone(): check FVG trong ± 2*zone_width
+- void RefineZoneWithFVG(): adjust zone_high/zone_low theo FVG edge
+
+=== SCORING BONUS ===
+- Zone trùng FVG unfilled: +8 điểm
+- Zone trùng FVG đã fill: +0
+```
+
+---
+
+## PROMPT 32: Adaptive Swing Lookback (P32)
+
+```
+Thay swing lookback cố định bằng adaptive theo local volatility.
+
+=== CONTEXT ===
+Hiện tại g_swing_lookback = 3-5 (cố định theo TF preset).
+Vấn đề: thị trường volatile cần lookback lớn hơn, thị trường sideway cần nhỏ hơn.
+
+=== LOGIC ===
+int AdaptiveSwingLookback(int bar_idx)
+{
+   // So sánh ATR(14) tại bar_idx vs ATR MA50:
+   // - ATR > 1.5× MA50 (high vol): lookback = base + 2
+   // - ATR < 0.7× MA50 (low vol): lookback = base - 1 (min 2)
+   // - Normal: lookback = base (g_swing_lookback)
+}
+```
+
+---
+
+## PROMPT 33: Volume-Weighted Zone Center (P33)
+
+```
+Dịch chuyển zone center về phía bar có volume cao nhất trong base.
+
+=== CONTEXT ===
+Khi zone có 2-3 nến (từ P30), nến nào có volume cao nhất = nơi có order flow mạnh nhất.
+Shift zone center 20-30% về phía nến đó → zone chính xác hơn.
+
+=== LOGIC ===
+void ShiftZoneToVolume(SReactionPoint &rp, int zone_bar, int base_size)
+{
+   // Tìm bar có tick volume cao nhất trong base
+   // Tính weighted center: center = Σ(price_i × vol_i) / Σ(vol_i)
+   // Shift zone: zone_high/zone_low dịch 20% về phía weighted center
+   // Không vượt ATR cap
+}
+```
+
+---
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.
 
