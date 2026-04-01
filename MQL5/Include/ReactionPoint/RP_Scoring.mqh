@@ -71,9 +71,31 @@ double CalcFibonacciScore(double price)
 }
 
 //+------------------------------------------------------------------+
-//| CalcVolumeScore — uses cached volume MA20                         |
+//| GetSessionVolumeMultiplier — normalize volume by session (P27c)  |
+//| Asian sessions have lower baseline volume than London/NY          |
+//| Returns multiplier to adjust MA20 threshold accordingly           |
 //+------------------------------------------------------------------+
-double CalcVolumeScore(int bar_shift)
+double GetSessionVolumeMultiplier(ENUM_SESSION session)
+{
+   switch(session)
+   {
+      case SESSION_OVERLAP:     return 1.0;   // Highest liquidity — baseline
+      case SESSION_LONDON_OPEN: return 1.0;   // High liquidity
+      case SESSION_NY_OPEN:     return 1.0;   // High liquidity
+      case SESSION_LONDON:      return 1.05;  // Slightly lower than opens
+      case SESSION_NY:          return 1.05;  // Slightly lower than opens
+      case SESSION_ASIAN:       return 0.70;  // Lower baseline — reduce threshold
+      case SESSION_DEAD:        return 0.60;  // Lowest baseline — reduce threshold more
+   }
+   return 1.0;
+}
+
+//+------------------------------------------------------------------+
+//| CalcVolumeScore — session-normalized volume scoring (P27c)       |
+//| Volume threshold adapts to session: Asian/Dead use lower baseline |
+//| so genuine volume spikes in low-liquidity sessions are rewarded   |
+//+------------------------------------------------------------------+
+double CalcVolumeScore(int bar_shift, ENUM_SESSION session_formed)
 {
    long tick_vol = iVolume(_Symbol, PERIOD_CURRENT, bar_shift);
    if(tick_vol <= 0) return 0.0;
@@ -81,9 +103,68 @@ double CalcVolumeScore(int bar_shift)
    // Use cached MA20 from UpdateBarCache
    if(g_cached_volume_ma20 <= 0.0) return 0.0;
 
-   if(tick_vol > g_cached_volume_ma20 * 1.5) return 15.0;
-   if(tick_vol > g_cached_volume_ma20 * 1.2) return 8.0;
+   // Normalize MA20 by session — lower sessions get lower threshold
+   double session_mult = GetSessionVolumeMultiplier(session_formed);
+   double adjusted_ma20 = g_cached_volume_ma20 * session_mult;
+
+   double vol_ratio = (double)tick_vol / adjusted_ma20;
+
+   // Gradient scoring instead of binary thresholds
+   if(vol_ratio > 2.0) return 15.0;       // Extreme volume spike
+   if(vol_ratio > 1.5) return 12.0;       // Strong volume
+   if(vol_ratio > 1.2) return 8.0;        // Above average
+   if(vol_ratio > 1.0) return 3.0;        // Slightly above average
    return 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| CalcPatternDirectionScore — direction-aware candle pattern (P27a) |
+//| Full score when pattern aligns with zone type:                    |
+//|   Support zone: bullish patterns (bullish pinbar, bullish engulf) |
+//|   Resistance zone: bearish patterns                               |
+//| Half score for neutral patterns (outside bar)                     |
+//| Reduced score for misaligned patterns                             |
+//+------------------------------------------------------------------+
+double CalcPatternDirectionScore(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   SReactionPoint rp = g_rp_array[rp_index];
+
+   if(rp.candle_pattern == PATTERN_NONE) return 0.0;
+
+   // Base pattern value
+   double base_val = 0.0;
+   switch(rp.candle_pattern)
+   {
+      case PATTERN_PINBAR:      base_val = 12.0; break;
+      case PATTERN_ENGULFING:   base_val = 10.0; break;
+      case PATTERN_OUTSIDE_BAR: base_val = 8.0;  break;
+      case PATTERN_LARGE_WICK:  base_val = 6.0;  break;
+      default: return 0.0;
+   }
+
+   // Determine candle direction at the swing bar
+   double open_f  = iOpen(_Symbol, PERIOD_CURRENT, rp.bar_formed);
+   double close_f = iClose(_Symbol, PERIOD_CURRENT, rp.bar_formed);
+   if(open_f == 0.0 || close_f == 0.0) return base_val * 0.5;  // Unknown → neutral
+
+   bool is_bullish_candle = (close_f > open_f);
+
+   // Determine pattern-zone alignment
+   // Support zone wants bullish reaction (rejection up)
+   // Resistance zone wants bearish reaction (rejection down)
+   bool is_aligned = false;
+   if(rp.rp_type == RP_SUPPORT)
+      is_aligned = is_bullish_candle;
+   else
+      is_aligned = !is_bullish_candle;
+
+   // Outside Bar is direction-neutral — always gets 75% score
+   if(rp.candle_pattern == PATTERN_OUTSIDE_BAR)
+      return base_val * 0.75;
+
+   // Aligned: full score | Misaligned: 30% score
+   return is_aligned ? base_val : base_val * 0.30;
 }
 
 //+------------------------------------------------------------------+
@@ -135,8 +216,17 @@ double RoundNumberScore(double price)
 }
 
 //+------------------------------------------------------------------+
-//| CalcZonePrecisionScore — reward tight/refined zones (P24d)       |
+//| CalcZonePrecisionScore — gradient zone precision scoring (P27b)  |
+//| Replaces step function with linear interpolation for width score  |
 //| Range: [-5, +13]                                                  |
+//|                                                                    |
+//| Width/ATR ratio → score mapping (linear gradient):                |
+//|   0.0 - 0.15  →  +5.0  (ultra-tight, institutional)              |
+//|   0.15 - 0.30 →  +5.0 to +2.0  (tight, good precision)          |
+//|   0.30 - 0.55 →  +2.0 to  0.0  (average, neutral)               |
+//|   0.55 - 0.80 →   0.0 to -2.0  (wide, weak precision)           |
+//|   0.80 - 1.20 →  -2.0 to -5.0  (very wide, penalized)           |
+//|   1.20+        →  -5.0  (capped penalty)                          |
 //+------------------------------------------------------------------+
 double CalcZonePrecisionScore(int rp_index)
 {
@@ -149,12 +239,19 @@ double CalcZonePrecisionScore(int rp_index)
 
    double width_ratio = zone_width / g_cached_atr14;
 
-   // 1. Tight zone bonus: width < 0.3x ATR → institutional precision (+5)
-   if(width_ratio < 0.30)
-      score += 5.0;
-   // Penalty: width > 0.8x ATR → zone too wide, low precision (-5)
-   else if(width_ratio > 0.80)
-      score -= 5.0;
+   // 1. Width precision — linear gradient instead of step function
+   if(width_ratio <= 0.15)
+      score += 5.0;                                             // Ultra-tight: max bonus
+   else if(width_ratio <= 0.30)
+      score += 5.0 - (width_ratio - 0.15) / 0.15 * 3.0;       // 5.0 → 2.0
+   else if(width_ratio <= 0.55)
+      score += 2.0 - (width_ratio - 0.30) / 0.25 * 2.0;       // 2.0 → 0.0
+   else if(width_ratio <= 0.80)
+      score += 0.0 - (width_ratio - 0.55) / 0.25 * 2.0;       // 0.0 → -2.0
+   else if(width_ratio <= 1.20)
+      score += -2.0 - (width_ratio - 0.80) / 0.40 * 3.0;      // -2.0 → -5.0
+   else
+      score -= 5.0;                                             // Very wide: max penalty
 
    // 2. Retest-refined zone: tested 2+ times AND zone has shrunk → confirmed by PA (+5)
    if(rp.test_count >= 2)
@@ -275,22 +372,16 @@ double CalcBaseScore(int rp_index)
    // 2. Test Quality (max 25, was max 20) — P25a: weighted by body vs wick
    score += CalcTestQualityScore(rp_index);
 
-   // 3. Candle Pattern (max 12) — confirmation only, not primary driver
-   //    Pattern already saved in rp.candle_pattern at detect time
-   switch(rp.candle_pattern)
-   {
-      case PATTERN_PINBAR:      score += 12.0; break;
-      case PATTERN_ENGULFING:   score += 10.0; break;
-      case PATTERN_OUTSIDE_BAR: score += 8.0;  break;
-      case PATTERN_LARGE_WICK:  score += 6.0;  break;
-      default: break;
-   }
+   // 3. Candle Pattern (max 12) — P27a: direction-aware scoring
+   //    Full score when pattern direction aligns with zone type
+   //    Reduced score for misaligned patterns
+   score += CalcPatternDirectionScore(rp_index);
 
    // 4. Fibonacci Alignment (max 10) — uses cached fibo levels
    score += CalcFibonacciScore(rp.price);
 
-   // 5. Volume (max 15) — uses cached volume MA20
-   score += CalcVolumeScore(rp.bar_formed);
+   // 5. Volume (max 15) — P27c: session-normalized volume scoring
+   score += CalcVolumeScore(rp.bar_formed, rp.session_formed);
 
    // 6. Round Number (max 8)
    score += RoundNumberScore(rp.price);

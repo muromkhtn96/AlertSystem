@@ -258,26 +258,51 @@ Viền chấm         →  Level 2 hoặc Level 3
 Hiệu ứng phát sáng →  Vùng hợp lưu 4+ RP (3 lớp chữ nhật)
 ```
 
-### 5.2 Nhãn RP (2 dòng)
+### 5.2 Nhãn RP (Label trên zone)
 
-Mỗi zone có nhãn 2 dòng:
+Label hiển thị trực tiếp trên zone (bên phải), gồm 1 dòng:
 
 ```
-Dòng 1: [icon] [điểm] [thanh điểm] [loại]
-Dòng 2: [khung TF] | Tested:[số lần] | [phiên] | [trạng thái]
+[CẤP ĐỘ] | [LOẠI] [ĐIỂM] | [TF] | Tested:[SỐ LẦN]x | [TRẠNG THÁI]
 
 Ví dụ:
-  ⭐ 124 ████████████░ CONFLUENCE
-  H1+H4+D1 | Tested:3x | London | Fresh
+  PREMIUM | CONFLUENCE 124 | H1 | Tested:3x | Fresh
+  LV1 | RESISTANCE 85 | H4 | Tested:1x | Active
 ```
 
-**Ý nghĩa icon:**
-| Icon | Nghĩa |
-|------|--------|
-| ⭐ | Premium (≥110 điểm) |
-| 🔴 | Level 1 (80–109) |
-| 🟠 | Level 2 (60–79) |
-| 🔵 | Level 3 (40–59) |
+**Cấp độ zone:**
+
+| Cấp độ | Điểm | Ý nghĩa |
+|--------|-------|---------|
+| **PREMIUM** | ≥110 | Zone cực mạnh, xác suất phản ứng giá rất cao |
+| **LV1** | 80–109 | Zone mạnh, đáng tin cậy để giao dịch |
+| **LV2** | 60–79 | Zone trung bình, cần thêm xác nhận |
+| **LV3** | 40–59 | Zone yếu, chỉ tham khảo |
+
+**Loại zone:**
+
+| Loại | Ý nghĩa |
+|------|---------|
+| **SUPPORT** | Vùng hỗ trợ — giá có xu hướng bật lên khi chạm vùng này |
+| **RESISTANCE** | Vùng kháng cự — giá có xu hướng bật xuống khi chạm vùng này |
+| **CONFLUENCE** | Vùng hợp lưu — có 3 RP trở lên từ nhiều timeframe chồng nhau tại cùng 1 vùng giá, tín hiệu mạnh nhất |
+
+**Trạng thái zone:**
+
+| Trạng thái | Ý nghĩa |
+|------------|---------|
+| **Fresh** | Zone mới hình thành, chưa bị test lần nào — giá chạm lần đầu thường phản ứng mạnh nhất |
+| **Active** | Zone đang hoạt động, đã bị test ít nhất 1 lần nhưng vẫn giữ vững |
+| **RoleRev** | Role Reversal — zone đã đổi vai trò: Support cũ bị phá vỡ → trở thành Resistance (hoặc ngược lại). Đây là tín hiệu xác nhận xu hướng mạnh |
+| **Decay:-N** | Zone đang suy giảm sức mạnh theo thời gian, mất N% so với ban đầu. Zone càng cũ càng giảm hiệu lực |
+
+**Tested (số lần test):**
+
+| Giá trị | Ý nghĩa |
+|---------|---------|
+| **Tested:0x** | Chưa test — zone Fresh, lần chạm đầu tiên có phản ứng mạnh nhất |
+| **Tested:1-2x** | Test ít — zone vẫn mạnh, mỗi lần test thành công là xác nhận thêm |
+| **Tested:3x+** | Test nhiều — zone đã được xác nhận nhiều lần nhưng cũng tăng rủi ro bị phá vỡ |
 
 ### 5.3 Dashboard (Bảng thông tin)
 
@@ -342,7 +367,35 @@ Final Score = Base Score
             + First touch     (+10 nếu chưa test)
 ```
 
-### 6.3 Phân cấp RP
+### 6.3 Vùng Confluence — Gộp và Phát hiện Test
+
+**Gộp zone chồng nhau (Merge):**
+
+Khi 2 vùng confluence nằm quá gần nhau (overlap hoặc cách ≤ `Confluence_Merge_Pips`), hệ thống tự động gộp:
+
+1. So sánh `final_score` của 2 zone
+2. **Giữ nguyên** zone có score cao hơn (boundaries không thay đổi)
+3. **Xóa** zone yếu hơn
+4. Chuyển toàn bộ RP từ zone bị xóa sang zone còn lại
+5. Nếu tổng RP ≥ 4 → tự động nâng cấp lên **PREMIUM**
+
+> Kết quả: Không còn 2 zone PREMIUM nằm sát nhau — chỉ giữ zone tốt nhất.
+
+**Phát hiện test trên zone confluence:**
+
+Hệ thống phát hiện test ở 2 cấp:
+
+| Cấp | Điều kiện | Mô tả |
+|-----|-----------|-------|
+| **RP riêng lẻ** | Price vào `zone_high/zone_low` của từng RP | Phát hiện chính xác trên từng RP nhỏ |
+| **Confluence zone** | Price vào `zone_high/zone_low` của zone confluence | Bắt được test ngay cả khi price không chạm đúng RP nhỏ bên trong |
+
+Khi price test confluence zone:
+- Tìm RP có score cao nhất trong zone → cập nhật `test_count` và `is_fresh` cho RP đó
+- Không đếm trùng nếu RP đã được test trên cùng bar
+- Loại trừ breakout (giá đóng cửa vượt qua zone)
+
+### 6.4 Phân cấp RP
 
 | Cấp | Điểm | Màu | Ý nghĩa |
 |-----|------|-----|---------|

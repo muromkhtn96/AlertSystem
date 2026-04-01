@@ -349,7 +349,86 @@ void MergeClusterZones()
       cluster_start = i;
    }
 
+   //--- Post-merge: merge overlapping confluence zones
+   MergeOverlappingConfluenceZones();
+
    g_confluence_needs_update = false;
+}
+
+//+------------------------------------------------------------------+
+//| MergeOverlappingConfluenceZones                                    |
+//| If two confluence zones overlap or are within merge distance,      |
+//| keep the one with higher score and absorb the other                |
+//+------------------------------------------------------------------+
+void MergeOverlappingConfluenceZones()
+{
+   double merge_dist = PipsToPrice(g_confluence_merge_pips);
+
+   bool merged = true;
+   while(merged)
+   {
+      merged = false;
+      for(int i = 0; i < g_confluence_count && !merged; i++)
+      {
+         for(int j = i + 1; j < g_confluence_count && !merged; j++)
+         {
+            //--- Check if zones overlap or are within merge distance
+            bool overlap = (g_confluence_array[i].zone_low <= g_confluence_array[j].zone_high + merge_dist) &&
+                           (g_confluence_array[j].zone_low <= g_confluence_array[i].zone_high + merge_dist);
+            if(!overlap) continue;
+
+            //--- Pick winner (higher score), loser gets absorbed
+            int winner = i, loser = j;
+            if(g_confluence_array[j].final_score > g_confluence_array[i].final_score)
+            { winner = j; loser = i; }
+
+            //--- Keep winner's zone boundaries (better zone = more precise)
+
+            //--- Upgrade multiplier if combined RP count qualifies
+            int combined_rps = g_confluence_array[winner].rp_count + g_confluence_array[loser].rp_count;
+            if(combined_rps >= 4 && !g_confluence_array[winner].is_premium)
+            {
+               g_confluence_array[winner].multiplier = 1.8;
+               g_confluence_array[winner].bonus      = 40.0;
+               g_confluence_array[winner].is_premium = true;
+            }
+
+            //--- Absorb loser's RPs into winner (up to MAX_ZONE_RPS)
+            for(int k = 0; k < g_confluence_array[loser].rp_count; k++)
+            {
+               if(g_confluence_array[winner].rp_count >= MAX_ZONE_RPS) break;
+               int rp_id = g_confluence_array[loser].rp_ids[k];
+               bool exists = false;
+               for(int m = 0; m < g_confluence_array[winner].rp_count; m++)
+               {
+                  if(g_confluence_array[winner].rp_ids[m] == rp_id) { exists = true; break; }
+               }
+               if(!exists)
+               {
+                  g_confluence_array[winner].rp_ids[g_confluence_array[winner].rp_count] = rp_id;
+                  g_confluence_array[winner].rp_count++;
+               }
+            }
+
+            //--- Re-point loser's RPs to winner zone
+            for(int k = 0; k < g_rp_count; k++)
+            {
+               if(g_rp_array[k].confluence_id == g_confluence_array[loser].id)
+               {
+                  g_rp_array[k].confluence_id = g_confluence_array[winner].id;
+                  g_rp_dirty[k] = true;
+               }
+            }
+
+            //--- Remove loser zone by shifting array
+            for(int k = loser; k < g_confluence_count - 1; k++)
+               g_confluence_array[k] = g_confluence_array[k + 1];
+            g_confluence_count--;
+
+            merged = true; // restart scan from beginning
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+

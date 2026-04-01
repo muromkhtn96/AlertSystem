@@ -21,24 +21,39 @@ static double        g_prev_opacity[];
 static bool          g_draw_state_initialized = false;
 
 //+------------------------------------------------------------------+
-//| Alpha values by level                                             |
+//| P28: Fill alpha — must be high enough to see on dark backgrounds   |
+//| BlendColor(fg, bg, alpha) with dark bg needs alpha >= 25 to show  |
 //+------------------------------------------------------------------+
 int GetLevelAlpha(ENUM_RP_LEVEL level)
 {
    switch(level)
    {
-      case RP_PREMIUM: return 80;
-      case RP_LEVEL1:  return 70;
-      case RP_LEVEL2:  return 50;
-      case RP_LEVEL3:  return 35;
-      default:         return 30;
+      case RP_PREMIUM: return 90;   // Strong, clearly visible
+      case RP_LEVEL1:  return 70;   // Visible
+      case RP_LEVEL2:  return 45;   // Moderate
+      case RP_LEVEL3:  return 30;   // Subtle but present
+      default:         return 20;
    }
 }
 
 //+------------------------------------------------------------------+
-//| GetRPColor — determine color for an RP                            |
+//| P28: Edge line width by level — thicker = stronger                 |
 //+------------------------------------------------------------------+
-color GetRPColor(int rp_index)
+int GetEdgeWidth(ENUM_RP_LEVEL level)
+{
+   switch(level)
+   {
+      case RP_PREMIUM: return 3;
+      case RP_LEVEL1:  return 2;
+      case RP_LEVEL2:  return 1;
+      default:         return 1;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| P28: Get zone base color by type (support/resistance aware)        |
+//+------------------------------------------------------------------+
+color GetZoneBaseColor(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return clrGray;
    SReactionPoint rp = g_rp_array[rp_index];
@@ -46,18 +61,49 @@ color GetRPColor(int rp_index)
    if(rp.is_role_reversed) return g_color_role_reversal;
    if(rp.is_confluence)    return g_color_confluence;
 
-   switch(rp.rp_level)
+   // Type-aware coloring: support = teal family, resistance = coral family
+   if(rp.rp_type == RP_SUPPORT)
    {
-      case RP_PREMIUM: return g_color_premium;
-      case RP_LEVEL1:  return g_color_level1;
-      case RP_LEVEL2:  return g_color_level2;
-      case RP_LEVEL3:  return g_color_level3;
-      default:         return clrGray;
+      switch(rp.rp_level)
+      {
+         case RP_PREMIUM: return g_color_premium;
+         case RP_LEVEL1:  return g_color_support;
+         case RP_LEVEL2:  return g_color_support;
+         case RP_LEVEL3:  return g_color_support;
+         default:         return clrGray;
+      }
+   }
+   else
+   {
+      switch(rp.rp_level)
+      {
+         case RP_PREMIUM: return g_color_premium;
+         case RP_LEVEL1:  return g_color_resistance;
+         case RP_LEVEL2:  return g_color_resistance;
+         case RP_LEVEL3:  return g_color_resistance;
+         default:         return clrGray;
+      }
    }
 }
 
 //+------------------------------------------------------------------+
-//| DrawRPZone — OBJ_RECTANGLE for one RP                             |
+//| GetRPColor — backward-compatible wrapper                           |
+//+------------------------------------------------------------------+
+color GetRPColor(int rp_index)
+{
+   return GetZoneBaseColor(rp_index);
+}
+
+//+------------------------------------------------------------------+
+//| P28: DrawRPZone — modern zone: soft fill + top/bottom edge lines  |
+//|                                                                    |
+//| Visual design:                                                     |
+//|   ─────────────── (edge_high: solid line, width by level)          |
+//|   ░░░░░░░░░░░░░░░ (fill: soft transparent rectangle)              |
+//|   ─────────────── (edge_low: solid line, width by level)           |
+//|                                                                    |
+//| Premium/L1: solid edges, visible fill                              |
+//| L2/L3: thinner edges, subtle fill                                  |
 //+------------------------------------------------------------------+
 void DrawRPZone(int rp_index)
 {
@@ -69,60 +115,101 @@ void DrawRPZone(int rp_index)
    if(g_clean_chart_mode && rp.rp_level != RP_PREMIUM && rp.rp_level != RP_LEVEL1)
       return;
 
-   string name = OBJECT_PREFIX + "ZONE_" + IntegerToString(rp.id);
+   string id_str    = IntegerToString(rp.id);
+   string name_fill = OBJECT_PREFIX + "ZONE_" + id_str;
+   string name_top  = OBJECT_PREFIX + "EDGE_H_" + id_str;
+   string name_bot  = OBJECT_PREFIX + "EDGE_L_" + id_str;
 
    //--- Time range: from formed to future
    datetime time_start = rp.time_formed;
    datetime time_end   = TimeCurrent() + PeriodSeconds() * 20;
 
    //--- Color with opacity decay
-   color fg = GetRPColor(rp_index);
+   color fg = GetZoneBaseColor(rp_index);
    color bg = GetChartBackground();
    int alpha = GetLevelAlpha(rp.rp_level);
 
-   //--- Decay visual: alpha decreases linearly with age, floor 30%
+   //--- Decay visual: alpha decreases with age, floor at 20% (visible on dark bg)
    alpha = (int)(alpha * rp.display_opacity / 100.0);
-   if(alpha < 30) alpha = 30;
+   if(alpha < 20) alpha = 20;
 
-   color blended = BlendColor(fg, bg, alpha);
+   color fill_color = BlendColor(fg, bg, alpha);
+   int edge_width   = GetEdgeWidth(rp.rp_level);
 
-   //--- Create or update rectangle
-   if(ObjectFind(0, name) < 0)
+   //--- 1. FILL RECTANGLE (soft transparent body)
+   if(ObjectFind(0, name_fill) < 0)
    {
-      ObjectCreate(0, name, OBJ_RECTANGLE, 0,
-                   time_start, rp.zone_high,
-                   time_end, rp.zone_low);
+      ObjectCreate(0, name_fill, OBJ_RECTANGLE, 0,
+                   time_start, rp.zone_high, time_end, rp.zone_low);
       g_object_count++;
-
-      //--- Static properties — set ONCE on creation only
-      ObjectSetInteger(0, name, OBJPROP_FILL, true);
-      ObjectSetInteger(0, name, OBJPROP_BACK, true);
-      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
-
-      if(rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
-      else
-         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, name_fill, OBJPROP_FILL, true);
+      ObjectSetInteger(0, name_fill, OBJPROP_BACK, true);
+      ObjectSetInteger(0, name_fill, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name_fill, OBJPROP_HIDDEN, true);
    }
    else
    {
-      //--- Only update time end (extends zone forward) and price if changed
-      ObjectSetInteger(0, name, OBJPROP_TIME, 1, time_end);
+      ObjectSetInteger(0, name_fill, OBJPROP_TIME, 1, time_end);
    }
 
-   //--- Update color only when opacity/score changed (detected by dirty flag)
+   //--- 2. TOP EDGE LINE (zone_high boundary — crisp, visible)
+   if(ObjectFind(0, name_top) < 0)
+   {
+      ObjectCreate(0, name_top, OBJ_TREND, 0,
+                   time_start, rp.zone_high, time_end, rp.zone_high);
+      g_object_count++;
+      ObjectSetInteger(0, name_top, OBJPROP_RAY_LEFT, false);
+      ObjectSetInteger(0, name_top, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name_top, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name_top, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, name_top, OBJPROP_BACK, false); // On top of fill
+   }
+   else
+   {
+      ObjectSetInteger(0, name_top, OBJPROP_TIME, 1, time_end);
+   }
+
+   //--- 3. BOTTOM EDGE LINE (zone_low boundary)
+   if(ObjectFind(0, name_bot) < 0)
+   {
+      ObjectCreate(0, name_bot, OBJ_TREND, 0,
+                   time_start, rp.zone_low, time_end, rp.zone_low);
+      g_object_count++;
+      ObjectSetInteger(0, name_bot, OBJPROP_RAY_LEFT, false);
+      ObjectSetInteger(0, name_bot, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name_bot, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name_bot, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, name_bot, OBJPROP_BACK, false);
+   }
+   else
+   {
+      ObjectSetInteger(0, name_bot, OBJPROP_TIME, 1, time_end);
+   }
+
+   //--- Update visual properties when dirty
    if(g_rp_dirty[rp_index])
    {
-      ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 0, rp.zone_high);
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 1, rp.zone_low);
+      // Fill
+      ObjectSetInteger(0, name_fill, OBJPROP_COLOR, fill_color);
+      ObjectSetDouble(0, name_fill, OBJPROP_PRICE, 0, rp.zone_high);
+      ObjectSetDouble(0, name_fill, OBJPROP_PRICE, 1, rp.zone_low);
 
-      if(rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
-      else
-         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
+      // Edge color: brighter than fill (90% opacity for edges)
+      color edge_color = BlendColor(fg, bg, MathMin(alpha + 40, 95));
+
+      // Top edge
+      ObjectSetInteger(0, name_top, OBJPROP_COLOR, edge_color);
+      ObjectSetInteger(0, name_top, OBJPROP_WIDTH, edge_width);
+      ObjectSetInteger(0, name_top, OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetDouble(0, name_top, OBJPROP_PRICE, 0, rp.zone_high);
+      ObjectSetDouble(0, name_top, OBJPROP_PRICE, 1, rp.zone_high);
+
+      // Bottom edge
+      ObjectSetInteger(0, name_bot, OBJPROP_COLOR, edge_color);
+      ObjectSetInteger(0, name_bot, OBJPROP_WIDTH, edge_width);
+      ObjectSetInteger(0, name_bot, OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetDouble(0, name_bot, OBJPROP_PRICE, 0, rp.zone_low);
+      ObjectSetDouble(0, name_bot, OBJPROP_PRICE, 1, rp.zone_low);
    }
 }
 
@@ -227,34 +314,10 @@ void DrawConfluenceGlow(int conf_index)
 }
 
 //+------------------------------------------------------------------+
-//| Build progress bar string from score                               |
-//+------------------------------------------------------------------+
-string BuildProgressBar(double score, int total_chars)
-{
-   int filled = (int)MathRound(score / SCORE_CAP * total_chars);
-   if(filled < 0) filled = 0;
-   if(filled > total_chars) filled = total_chars;
-
-   string bar = "";
-   string block_filled = ShortToString(0x2588); // █ (U+2588)
-   string block_empty  = ShortToString(0x2591); // ░ (U+2591)
-
-   for(int i = 0; i < filled; i++)
-      bar += block_filled;
-   for(int i = filled; i < total_chars; i++)
-      bar += block_empty;
-
-   return bar;
-}
-
-//+------------------------------------------------------------------+
-//| GetLevelIcon — BMP-safe characters (no surrogate pairs)            |
+//| GetLevelIcon — readable level name                                 |
 //+------------------------------------------------------------------+
 string GetLevelIcon(ENUM_RP_LEVEL level)
 {
-   // MQL5 \x escape = single 16-bit char. Emoji above U+FFFF
-   // require surrogate pairs which MQL5 doesn't support.
-   // Use BMP-safe symbols instead:
    switch(level)
    {
       case RP_PREMIUM: return "PREMIUM";
@@ -266,7 +329,9 @@ string GetLevelIcon(ENUM_RP_LEVEL level)
 }
 
 //+------------------------------------------------------------------+
-//| DrawRPLabel — text label for an RP                                 |
+//| DrawRPLabel — original readable format, positioned at zone center  |
+//|                                                                    |
+//| Format: PREMIUM | CONFLUENCE 124 | H1 | Tested:0x | Fresh         |
 //+------------------------------------------------------------------+
 void DrawRPLabel(int rp_index)
 {
@@ -277,10 +342,10 @@ void DrawRPLabel(int rp_index)
 
    string name = OBJECT_PREFIX + "LBL_" + IntegerToString(rp.id);
 
-   //--- Position: center of zone vertically, right edge of zone horizontally
+   //--- Position: center of zone
    double label_price = (rp.zone_high + rp.zone_low) / 2.0;
 
-   //--- Build label text: [icon] [score] | [TF] | Tested:[n]x | [status]
+   //--- Build label: LEVEL | TYPE SCORE | TF | Tested:Nx | Status
    string status_str;
    if(rp.is_role_reversed)
       status_str = "RoleRev";
@@ -302,7 +367,6 @@ void DrawRPLabel(int rp_index)
                       TFToString(rp.source_tf) + " | Tested:" +
                       IntegerToString(rp.test_count) + "x | " + status_str;
 
-   //--- Create or update text object — right edge of zone (current time)
    datetime label_time = TimeCurrent();
 
    if(ObjectFind(0, name) < 0)
@@ -322,166 +386,12 @@ void DrawRPLabel(int rp_index)
    ObjectSetInteger(0, name, OBJPROP_COLOR, GetRPColor(rp_index));
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-
-   //--- Anchor: right-aligned, vertically centered on zone
    ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT);
 }
 
-//+------------------------------------------------------------------+
-//| DrawEntrySetupPanel — OBJ_RECTANGLE_LABEL + labels for entry      |
-//+------------------------------------------------------------------+
-void DrawEntrySetupPanel(int setup_index)
-{
-   if(setup_index < 0 || setup_index >= g_setup_count) return;
-   SEntrySetup setup = g_setup_array[setup_index];
-   if(!setup.is_active) return;
-
-   //--- Find RP score
-   double rp_score = 0.0;
-   for(int r = 0; r < g_rp_count; r++)
-   {
-      if(g_rp_array[r].id == setup.rp_id)
-      {
-         rp_score = g_rp_array[r].final_score;
-         break;
-      }
-   }
-
-   string prefix = OBJECT_PREFIX + "ENTRY_" + IntegerToString(setup_index) + "_";
-   bool is_buy = (setup.direction == RP_SUPPORT);
-   string dir_str = is_buy ? "BUY SETUP" : "SELL SETUP";
-
-   //--- Background panel
-   string bg_name = prefix + "BG";
-   if(ObjectFind(0, bg_name) < 0)
-   {
-      ObjectCreate(0, bg_name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      g_object_count++;
-   }
-
-   int panel_x = 10;
-   int panel_y = 100 + setup_index * 160;
-   int panel_w = 260;
-   int panel_h = 140;
-
-   ObjectSetInteger(0, bg_name, OBJPROP_XDISTANCE, panel_x);
-   ObjectSetInteger(0, bg_name, OBJPROP_YDISTANCE, panel_y);
-   ObjectSetInteger(0, bg_name, OBJPROP_XSIZE, panel_w);
-   ObjectSetInteger(0, bg_name, OBJPROP_YSIZE, panel_h);
-   ObjectSetInteger(0, bg_name, OBJPROP_BGCOLOR,
-                    is_buy ? ColorToARGB(C'15,30,15', 216) : ColorToARGB(C'30,15,15', 216));
-   ObjectSetInteger(0, bg_name, OBJPROP_BORDER_COLOR, clrDimGray);
-   ObjectSetInteger(0, bg_name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, bg_name, OBJPROP_BACK, false);
-   ObjectSetInteger(0, bg_name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, bg_name, OBJPROP_HIDDEN, true);
-
-   //--- Text lines
-   int bars_remaining = g_max_setup_age_bars - (Bars(_Symbol, PERIOD_CURRENT) - 1 - setup.bar_created);
-   if(bars_remaining < 0) bars_remaining = 0;
-
-   string lines[];
-   ArrayResize(lines, 7);
-   lines[0] = dir_str + "  Score: " + DoubleToString(rp_score, 0);
-   lines[1] = "Entry: " + DoubleToString(setup.entry_price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
-   lines[2] = "SL:    " + DoubleToString(setup.sl_price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) +
-              "  (" + DoubleToString(setup.sl_pips, 1) + " pip)";
-   lines[3] = "TP1:   " + DoubleToString(setup.tp1_price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) +
-              "  (" + DoubleToString(setup.tp1_pips, 1) + " pip)";
-   lines[4] = "TP2:   " + DoubleToString(setup.tp2_price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) +
-              "  (" + DoubleToString(setup.tp2_pips, 1) + " pip)";
-   lines[5] = "R:R1 = 1:" + DoubleToString(setup.rr_ratio1, 1) +
-              "  R:R2 = 1:" + DoubleToString(setup.rr_ratio2, 1);
-   lines[6] = "Expires in " + IntegerToString(bars_remaining) + " bars";
-
-   color text_color = is_buy ? g_color_entry_buy : g_color_entry_sell;
-
-   for(int row = 0; row < 7; row++)
-   {
-      string lbl_name = prefix + "L" + IntegerToString(row);
-      if(ObjectFind(0, lbl_name) < 0)
-      {
-         ObjectCreate(0, lbl_name, OBJ_LABEL, 0, 0, 0);
-         g_object_count++;
-      }
-
-      ObjectSetInteger(0, lbl_name, OBJPROP_XDISTANCE, panel_x + 10);
-      ObjectSetInteger(0, lbl_name, OBJPROP_YDISTANCE, panel_y + 8 + row * 18);
-      ObjectSetString(0, lbl_name, OBJPROP_TEXT, lines[row]);
-      ObjectSetString(0, lbl_name, OBJPROP_FONT, "Consolas");
-      ObjectSetInteger(0, lbl_name, OBJPROP_FONTSIZE, g_label_font_size);
-      ObjectSetInteger(0, lbl_name, OBJPROP_COLOR, (row == 0) ? text_color : clrWhite);
-      ObjectSetInteger(0, lbl_name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, lbl_name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, lbl_name, OBJPROP_HIDDEN, true);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| DrawSLTPLines — SL/TP/Entry horizontal lines for setup            |
-//+------------------------------------------------------------------+
-void DrawSLTPLines(int setup_index)
-{
-   if(setup_index < 0 || setup_index >= g_setup_count) return;
-   SEntrySetup setup = g_setup_array[setup_index];
-   if(!setup.is_active) return;
-
-   string prefix = OBJECT_PREFIX + "SLTP_" + IntegerToString(setup_index) + "_";
-   bool is_buy = (setup.direction == RP_SUPPORT);
-
-   //--- Entry line
-   string entry_name = prefix + "ENTRY";
-   if(ObjectFind(0, entry_name) < 0)
-   {
-      ObjectCreate(0, entry_name, OBJ_HLINE, 0, 0, setup.entry_price);
-      g_object_count++;
-   }
-   ObjectSetDouble(0, entry_name, OBJPROP_PRICE, 0, setup.entry_price);
-   ObjectSetInteger(0, entry_name, OBJPROP_COLOR, is_buy ? g_color_entry_buy : g_color_entry_sell);
-   ObjectSetInteger(0, entry_name, OBJPROP_STYLE, STYLE_SOLID);
-   ObjectSetInteger(0, entry_name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, entry_name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, entry_name, OBJPROP_HIDDEN, true);
-
-   //--- SL line
-   string sl_name = prefix + "SL";
-   if(ObjectFind(0, sl_name) < 0)
-   {
-      ObjectCreate(0, sl_name, OBJ_HLINE, 0, 0, setup.sl_price);
-      g_object_count++;
-   }
-   ObjectSetDouble(0, sl_name, OBJPROP_PRICE, 0, setup.sl_price);
-   ObjectSetInteger(0, sl_name, OBJPROP_COLOR, clrFireBrick);
-   ObjectSetInteger(0, sl_name, OBJPROP_STYLE, STYLE_DASH);
-   ObjectSetInteger(0, sl_name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, sl_name, OBJPROP_HIDDEN, true);
-
-   //--- TP1 line
-   string tp1_name = prefix + "TP1";
-   if(ObjectFind(0, tp1_name) < 0)
-   {
-      ObjectCreate(0, tp1_name, OBJ_HLINE, 0, 0, setup.tp1_price);
-      g_object_count++;
-   }
-   ObjectSetDouble(0, tp1_name, OBJPROP_PRICE, 0, setup.tp1_price);
-   ObjectSetInteger(0, tp1_name, OBJPROP_COLOR, clrKhaki);
-   ObjectSetInteger(0, tp1_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, tp1_name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, tp1_name, OBJPROP_HIDDEN, true);
-
-   //--- TP2 line
-   string tp2_name = prefix + "TP2";
-   if(ObjectFind(0, tp2_name) < 0)
-   {
-      ObjectCreate(0, tp2_name, OBJ_HLINE, 0, 0, setup.tp2_price);
-      g_object_count++;
-   }
-   ObjectSetDouble(0, tp2_name, OBJPROP_PRICE, 0, setup.tp2_price);
-   ObjectSetInteger(0, tp2_name, OBJPROP_COLOR, clrDarkKhaki);
-   ObjectSetInteger(0, tp2_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, tp2_name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, tp2_name, OBJPROP_HIDDEN, true);
-}
+// P28: Entry setup panels and SL/TP lines removed from chart drawing.
+// Entry logic remains in RP_EntrySetup.mqh for alert messages only.
+// Experienced traders prefer clean charts — zones + labels only.
 
 //+------------------------------------------------------------------+
 //| CreateSessionObjects — called ONCE in OnInit                       |
@@ -636,24 +546,7 @@ void RedrawChangedRP()
          DrawConfluenceGlow(z);
    }
 
-   //--- Redraw entry setups (skip in clean mode)
-   if(!g_clean_chart_mode)
-   for(int s = 0; s < g_setup_count; s++)
-   {
-      if(g_setup_array[s].is_active)
-      {
-         DrawEntrySetupPanel(s);
-         DrawSLTPLines(s);
-      }
-      else
-      {
-         //--- Cleanup inactive setup objects
-         string prefix = OBJECT_PREFIX + "ENTRY_" + IntegerToString(s) + "_";
-         ObjectsDeleteAll(0, prefix);
-         string sltp_prefix = OBJECT_PREFIX + "SLTP_" + IntegerToString(s) + "_";
-         ObjectsDeleteAll(0, sltp_prefix);
-      }
-   }
+   // P28: Entry setup panels removed — clean chart, zones only
 }
 
 //+------------------------------------------------------------------+
@@ -663,28 +556,15 @@ void DeleteRPObjects(int rp_id)
 {
    string id_str = IntegerToString(rp_id);
 
-   string zone_name = OBJECT_PREFIX + "ZONE_" + id_str;
-   if(ObjectFind(0, zone_name) >= 0)
+   //--- Zone fill + edge lines (P28)
+   string obj_names[] = {"ZONE_", "EDGE_H_", "EDGE_L_", "LBL_",
+                         "GLOW_OUT_", "GLOW_MID_", "GLOW_CORE_"};
+   for(int i = 0; i < 7; i++)
    {
-      ObjectDelete(0, zone_name);
-      g_object_count--;
-   }
-
-   string lbl_name = OBJECT_PREFIX + "LBL_" + id_str;
-   if(ObjectFind(0, lbl_name) >= 0)
-   {
-      ObjectDelete(0, lbl_name);
-      g_object_count--;
-   }
-
-   //--- Glow objects (confluence)
-   string glow_names[] = {"GLOW_OUT_", "GLOW_MID_", "GLOW_CORE_"};
-   for(int i = 0; i < 3; i++)
-   {
-      string gname = OBJECT_PREFIX + glow_names[i] + id_str;
-      if(ObjectFind(0, gname) >= 0)
+      string oname = OBJECT_PREFIX + obj_names[i] + id_str;
+      if(ObjectFind(0, oname) >= 0)
       {
-         ObjectDelete(0, gname);
+         ObjectDelete(0, oname);
          g_object_count--;
       }
    }

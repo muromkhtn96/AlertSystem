@@ -86,21 +86,6 @@ ENUM_CANDLE_PATTERN DetectCandlePattern(int bar_idx)
 }
 
 //+------------------------------------------------------------------+
-//| Get candle pattern score                                          |
-//+------------------------------------------------------------------+
-double GetCandlePatternScore(ENUM_CANDLE_PATTERN pattern)
-{
-   switch(pattern)
-   {
-      case PATTERN_PINBAR:      return 12.0;
-      case PATTERN_ENGULFING:   return 10.0;
-      case PATTERN_OUTSIDE_BAR: return 8.0;
-      case PATTERN_LARGE_WICK:  return 6.0;
-      default:                  return 0.0;
-   }
-}
-
-//+------------------------------------------------------------------+
 //| Check momentum confirmation for swing                             |
 //| Returns true + reaction_pips if price moved enough after swing    |
 //+------------------------------------------------------------------+
@@ -647,6 +632,67 @@ void CheckBreakoutsAndRetests()
 
       // Check role reversal retest
       CheckRoleReversalRetest(i, current_bar, close_1, high_1, low_1);
+   }
+
+   //--- Check confluence zone tests: price may enter confluence zone
+   //    without entering individual RP zones
+   CheckConfluenceZoneTests(close_1, high_1, low_1, current_bar);
+}
+
+//+------------------------------------------------------------------+
+//| CheckConfluenceZoneTests                                           |
+//| When price enters a confluence zone, update test_count for the     |
+//| best RP in that zone (even if price didn't hit individual RP zone) |
+//+------------------------------------------------------------------+
+void CheckConfluenceZoneTests(double close_1, double high_1, double low_1, int current_bar)
+{
+   for(int z = 0; z < g_confluence_count; z++)
+   {
+      //--- Check if price entered confluence zone
+      bool in_conf_zone = (low_1 <= g_confluence_array[z].zone_high &&
+                           high_1 >= g_confluence_array[z].zone_low);
+      if(!in_conf_zone) continue;
+
+      //--- Find best RP in this confluence zone
+      int best_idx = -1;
+      double best_score = -1.0;
+      for(int k = 0; k < g_confluence_array[z].rp_count; k++)
+      {
+         int rp_id = g_confluence_array[z].rp_ids[k];
+         for(int r = 0; r < g_rp_count; r++)
+         {
+            if(g_rp_array[r].id == rp_id && g_rp_array[r].is_active)
+            {
+               if(g_rp_array[r].final_score > best_score)
+               {
+                  best_score = g_rp_array[r].final_score;
+                  best_idx = r;
+               }
+               break;
+            }
+         }
+      }
+      if(best_idx < 0) continue;
+
+      //--- Skip if this RP was already tested on this bar (by individual zone check)
+      if(g_rp_array[best_idx].bar_last_tested == current_bar) continue;
+
+      //--- Check it's not a breakout
+      bool is_breakout = false;
+      if(g_confluence_array[z].zone_type == RP_SUPPORT &&
+         close_1 < g_confluence_array[z].zone_low - PipsToPrice(g_breakout_confirm_pips))
+         is_breakout = true;
+      if(g_confluence_array[z].zone_type == RP_RESISTANCE &&
+         close_1 > g_confluence_array[z].zone_high + PipsToPrice(g_breakout_confirm_pips))
+         is_breakout = true;
+      if(is_breakout) continue;
+
+      //--- Update test on best RP
+      g_rp_array[best_idx].test_count++;
+      g_rp_array[best_idx].is_fresh = false;
+      g_rp_array[best_idx].time_last_tested = TimeCurrent();
+      g_rp_array[best_idx].bar_last_tested  = current_bar;
+      g_rp_dirty[best_idx] = true;
    }
 }
 
