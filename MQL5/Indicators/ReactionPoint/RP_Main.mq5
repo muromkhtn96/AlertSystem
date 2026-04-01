@@ -452,6 +452,7 @@ int OnInit()
    ArrayResize(g_fibo_legs, MAX_FIBO_LEGS);    // Phase 7 — P19
    ArrayInitialize(g_rp_dirty, true);      // Force first calc
    ArrayInitialize(g_last_calc_bar, -1);
+   InitRPIDMap();                          // v3.0.1: O(1) RP ID lookup map
    for(int fi = 0; fi < MAX_FIBO_LEGS; fi++)   // Init fibo legs
       g_fibo_legs[fi].Init();
    for(int ti = 0; ti < 3; ti++)               // Init HTF trends

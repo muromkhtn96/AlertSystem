@@ -35,8 +35,8 @@ void DashLabel(string name, int x, int y, string text, color clr, int font_size)
 {
    if(ObjectFind(0, name) < 0)
    {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-      g_object_count++;
+      if(ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0))
+         g_object_count++;
    }
 
    ENUM_BASE_CORNER corner;
@@ -95,8 +95,8 @@ void CreateDashboard()
    string bg_name = OBJECT_PREFIX + "DASH_BG";
    if(ObjectFind(0, bg_name) < 0)
    {
-      ObjectCreate(0, bg_name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      g_object_count++;
+      if(ObjectCreate(0, bg_name, OBJ_RECTANGLE_LABEL, 0, 0, 0))
+         g_object_count++;
    }
 
    ENUM_BASE_CORNER corner;
@@ -129,12 +129,26 @@ void CreateDashboard()
 //| UpdateDashboard — called once per new bar                          |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| SafeUnicode — returns Unicode char with ASCII fallback             |
+//+------------------------------------------------------------------+
+string SafeUnicode(ushort code, string fallback)
+{
+   string ch = ShortToString(code);
+   if(StringLen(ch) == 0 || ch == "" || ch == "?")
+      return fallback;
+   return ch;
+}
+
+//+------------------------------------------------------------------+
 //| P28: Thin separator line using Unicode                             |
 //+------------------------------------------------------------------+
 string DashSep(int char_count)
 {
    string s = "";
+   //--- Try Unicode box-drawing first, fallback to ASCII dash if rendering fails
    string thin_line = ShortToString(0x2500); // ─ (box drawing horizontal)
+   if(StringLen(thin_line) == 0 || thin_line == "" || thin_line == "?")
+      thin_line = "-";  // ASCII fallback for terminals without Unicode support
    for(int i = 0; i < char_count; i++)
       s += thin_line;
    return s;
@@ -174,9 +188,9 @@ void UpdateDashboard()
 
    DashLabel(OBJECT_PREFIX + "DASH_R1", x, y + row * DASH_ROW_HEIGHT,
              SessionToString(g_current_session) + "  " +
-             ShortToString(0x2502) + "  " +    // │ vertical separator
+             SafeUnicode(0x2502, "|") + "  " +    // │ vertical separator
              regime_short + " " + DoubleToString(g_current_adx, 0) + "  " +
-             ShortToString(0x2502) + "  " +
+             SafeUnicode(0x2502, "|") + "  " +
              GetBiasString(),
              regime_clr, fs);
    row++;
@@ -242,7 +256,7 @@ void UpdateDashboard()
 
          // Arrow indicator: ▲ for support below, ▼ for resistance above
          string arrow = (rp.rp_type == RP_SUPPORT) ?
-                        ShortToString(0x25B2) : ShortToString(0x25BC);
+                        SafeUnicode(0x25B2, "^") : SafeUnicode(0x25BC, "v");
 
          string rp_line = arrow + " " + t + "  " +
                           DoubleToString(rp.price, digits) + "  " +
@@ -265,7 +279,7 @@ void UpdateDashboard()
    {
       DashLabel(OBJECT_PREFIX + "DASH_RP" + IntegerToString(f),
                 x, y + row * DASH_ROW_HEIGHT,
-                ShortToString(0x00B7) + " ---", DASH_DIM_COLOR, fs);
+                SafeUnicode(0x00B7, "-") + " ---", DASH_DIM_COLOR, fs);
       row++;
    }
 
@@ -304,7 +318,7 @@ void UpdateDashboard()
       int total_decided = g_stats.total_reacted + g_stats.total_broken;
       int hit_pct = (total_decided > 0) ?
                     (int)MathRound((double)g_stats.total_reacted / (double)total_decided * 100.0) : 0;
-      footer += "  " + ShortToString(0x2502) + "  Hit " +
+      footer += "  " + SafeUnicode(0x2502, "|") + "  Hit " +
                 IntegerToString(hit_pct) + "%";
    }
 
@@ -386,9 +400,9 @@ void UpdateRadar(int x_base, int y_start, int fs)
    if(StringLen(sup_line) == 0) sup_line = "---";
 
    DashLabel(OBJECT_PREFIX + "DASH_RADAR_RES", x_base, y_start,
-             ShortToString(0x25BC) + " R  " + res_line, g_color_resistance, fs - 1);
+             SafeUnicode(0x25BC, "v") + " R  " + res_line, g_color_resistance, fs - 1);
    DashLabel(OBJECT_PREFIX + "DASH_RADAR_SUP", x_base, y_start + DASH_ROW_HEIGHT,
-             ShortToString(0x25B2) + " S  " + sup_line, g_color_support, fs - 1);
+             SafeUnicode(0x25B2, "^") + " S  " + sup_line, g_color_support, fs - 1);
 }
 
 //+------------------------------------------------------------------+

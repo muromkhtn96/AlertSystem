@@ -365,8 +365,16 @@ void MergeOverlappingConfluenceZones()
    double merge_dist = PipsToPrice(g_confluence_merge_pips);
 
    bool merged = true;
+   int merge_iterations = 0;
+   const int MAX_MERGE_ITERATIONS = 10;
    while(merged)
    {
+      if(merge_iterations >= MAX_MERGE_ITERATIONS)
+      {
+         Print("WARNING: MergeOverlappingConfluenceZones — hit iteration limit (", MAX_MERGE_ITERATIONS, "), stopping");
+         break;
+      }
+      merge_iterations++;
       merged = false;
       for(int i = 0; i < g_confluence_count && !merged; i++)
       {
@@ -410,13 +418,14 @@ void MergeOverlappingConfluenceZones()
                }
             }
 
-            //--- Re-point loser's RPs to winner zone
-            for(int k = 0; k < g_rp_count; k++)
+            //--- Re-point loser's RPs to winner zone (O(1) lookup via ID map)
+            for(int k = 0; k < g_confluence_array[loser].rp_count; k++)
             {
-               if(g_rp_array[k].confluence_id == g_confluence_array[loser].id)
+               int rp_idx = FindRPIndexByID(g_confluence_array[loser].rp_ids[k]);
+               if(rp_idx >= 0)
                {
-                  g_rp_array[k].confluence_id = g_confluence_array[winner].id;
-                  g_rp_dirty[k] = true;
+                  g_rp_array[rp_idx].confluence_id = g_confluence_array[winner].id;
+                  g_rp_dirty[rp_idx] = true;
                }
             }
 
@@ -444,24 +453,17 @@ void ApplyConfluenceScoring()
       SConfluenceZone zone = g_confluence_array[z];
       if(zone.rp_count <= 0) continue;
 
-      //--- Find RP with highest score in zone
+      //--- Find RP with highest score in zone (O(1) lookup per RP via ID map)
       int best_idx = -1;
       double best_score = -1.0;
 
       for(int k = 0; k < zone.rp_count; k++)
       {
-         //--- Find RP array index by ID
-         for(int r = 0; r < g_rp_count; r++)
+         int r = FindRPIndexByID(zone.rp_ids[k]);
+         if(r >= 0 && g_rp_array[r].is_active && g_rp_array[r].final_score > best_score)
          {
-            if(g_rp_array[r].id == zone.rp_ids[k] && g_rp_array[r].is_active)
-            {
-               if(g_rp_array[r].final_score > best_score)
-               {
-                  best_score = g_rp_array[r].final_score;
-                  best_idx = r;
-               }
-               break;
-            }
+            best_score = g_rp_array[r].final_score;
+            best_idx = r;
          }
       }
 
@@ -506,16 +508,13 @@ void HandlePartialBreakout(int rp_id)
 
       if(!found) continue;
 
-      //--- Detach the broken RP
-      for(int r = 0; r < g_rp_count; r++)
+      //--- Detach the broken RP (O(1) lookup via ID map)
+      int detach_idx = FindRPIndexByID(rp_id);
+      if(detach_idx >= 0)
       {
-         if(g_rp_array[r].id == rp_id)
-         {
-            g_rp_array[r].is_confluence = false;
-            g_rp_array[r].confluence_id = -1;
-            g_rp_dirty[r] = true;
-            break;
-         }
+         g_rp_array[detach_idx].is_confluence = false;
+         g_rp_array[detach_idx].confluence_id = -1;
+         g_rp_dirty[detach_idx] = true;
       }
 
       //--- Recalc multiplier/bonus or dissolve zone
@@ -524,15 +523,12 @@ void HandlePartialBreakout(int rp_id)
          //--- Dissolve zone: detach remaining RP
          if(zone.rp_count == 1)
          {
-            for(int r = 0; r < g_rp_count; r++)
+            int last_idx = FindRPIndexByID(zone.rp_ids[0]);
+            if(last_idx >= 0)
             {
-               if(g_rp_array[r].id == zone.rp_ids[0])
-               {
-                  g_rp_array[r].is_confluence = false;
-                  g_rp_array[r].confluence_id = -1;
-                  g_rp_dirty[r] = true;
-                  break;
-               }
+               g_rp_array[last_idx].is_confluence = false;
+               g_rp_array[last_idx].confluence_id = -1;
+               g_rp_dirty[last_idx] = true;
             }
          }
 
@@ -549,17 +545,12 @@ void HandlePartialBreakout(int rp_id)
          else if(zone.rp_count >= 3) { zone.multiplier = 1.5; zone.bonus = 25.0; zone.is_premium = false; }
          else if(zone.rp_count >= 2) { zone.multiplier = 1.3; zone.bonus = 10.0; zone.is_premium = false; }
 
-         //--- Mark remaining RPs dirty for re-score
+         //--- Mark remaining RPs dirty for re-score (O(1) lookup via ID map)
          for(int k = 0; k < zone.rp_count; k++)
          {
-            for(int r = 0; r < g_rp_count; r++)
-            {
-               if(g_rp_array[r].id == zone.rp_ids[k])
-               {
-                  g_rp_dirty[r] = true;
-                  break;
-               }
-            }
+            int dirty_idx = FindRPIndexByID(zone.rp_ids[k]);
+            if(dirty_idx >= 0)
+               g_rp_dirty[dirty_idx] = true;
          }
 
          //--- Write modified zone back to array

@@ -104,11 +104,12 @@ int OpenLogFile(string filepath)
 //+------------------------------------------------------------------+
 bool InitLogger()
 {
-   if(!g_use_logger) return true;
-
+   //--- Always init pending array (guards against writes when logger disabled mid-session)
    ArrayResize(g_pending_outcomes, MAX_PENDING_OUTCOMES);
    for(int i = 0; i < MAX_PENDING_OUTCOMES; i++)
       g_pending_outcomes[i].is_active = false;
+
+   if(!g_use_logger) return true;
 
    string symbol = _Symbol;
    string tf_str = EnumToString(Period());
@@ -194,9 +195,9 @@ void DeinitLogger()
 //+------------------------------------------------------------------+
 //| LogZoneCreated — log when a new RP zone is created                |
 //+------------------------------------------------------------------+
-void LogZoneCreated(const SReactionPoint &rp)
+bool LogZoneCreated(const SReactionPoint &rp)
 {
-   if(!g_use_logger || g_log_handle_zones == INVALID_HANDLE) return;
+   if(!g_use_logger || g_log_handle_zones == INVALID_HANDLE) return false;
 
    double zone_width = PriceToPips(rp.zone_high - rp.zone_low);
    double atr_pips   = PriceToPips(g_cached_atr14);
@@ -226,17 +227,26 @@ void LogZoneCreated(const SReactionPoint &rp)
       DoubleToString(rp.base_score, 1),
       DoubleToString(rp.final_score, 1),
       EnumToString(rp.rp_level));
+
+   //--- Validate write succeeded
+   int err = GetLastError();
+   if(err != 0)
+   {
+      Print("RP_Logger: LogZoneCreated write error ", err, " for rp_id=", rp.id);
+      return false;
+   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
 //| LogZoneTest — log each test event with quality details            |
 //+------------------------------------------------------------------+
-void LogZoneTest(const SReactionPoint &rp, bool is_body_test,
+bool LogZoneTest(const SReactionPoint &rp, bool is_body_test,
                  double zone_width_before, double zone_width_after,
                  double low_1, double high_1, double close_1,
                  long test_volume)
 {
-   if(!g_use_logger || g_log_handle_tests == INVALID_HANDLE) return;
+   if(!g_use_logger || g_log_handle_tests == INVALID_HANDLE) return false;
 
    double vol_vs_ma = (g_cached_volume_ma20 > 0.0) ?
       (double)test_volume / g_cached_volume_ma20 : 0.0;
@@ -257,14 +267,22 @@ void LogZoneTest(const SReactionPoint &rp, bool is_body_test,
 
    //--- Register pending outcome for reaction measurement
    RegisterPendingOutcome(rp);
+
+   int err = GetLastError();
+   if(err != 0)
+   {
+      Print("RP_Logger: LogZoneTest write error ", err, " for rp_id=", rp.id);
+      return false;
+   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
 //| LogZoneBroken — log when zone is broken                           |
 //+------------------------------------------------------------------+
-void LogZoneBroken(const SReactionPoint &rp)
+bool LogZoneBroken(const SReactionPoint &rp)
 {
-   if(!g_use_logger || g_log_handle_outcomes == INVALID_HANDLE) return;
+   if(!g_use_logger || g_log_handle_outcomes == INVALID_HANDLE) return false;
 
    double zone_width = PriceToPips(rp.zone_high - rp.zone_low);
    double atr_pips = PriceToPips(g_cached_atr14);
@@ -286,6 +304,14 @@ void LogZoneBroken(const SReactionPoint &rp)
       rp.weak_test_count,
       DoubleToString(zone_width, 1),
       DoubleToString(width_ratio, 3));
+
+   int err = GetLastError();
+   if(err != 0)
+   {
+      Print("RP_Logger: LogZoneBroken write error ", err, " for rp_id=", rp.id);
+      return false;
+   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -293,6 +319,9 @@ void LogZoneBroken(const SReactionPoint &rp)
 //+------------------------------------------------------------------+
 void RegisterPendingOutcome(const SReactionPoint &rp)
 {
+   //--- Guard: array must be initialized
+   if(ArraySize(g_pending_outcomes) < MAX_PENDING_OUTCOMES) return;
+
    // Find empty slot or overwrite oldest
    int slot = -1;
    for(int i = 0; i < MAX_PENDING_OUTCOMES; i++)
@@ -336,6 +365,7 @@ void RegisterPendingOutcome(const SReactionPoint &rp)
 void CheckPendingOutcomes(int measure_bars)
 {
    if(!g_use_logger || g_log_handle_outcomes == INVALID_HANDLE) return;
+   if(ArraySize(g_pending_outcomes) < MAX_PENDING_OUTCOMES) return;
 
    int current_bar = Bars(_Symbol, PERIOD_CURRENT) - 1;
 
