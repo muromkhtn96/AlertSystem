@@ -42,6 +42,10 @@ double CalcDecayPenalty(int rp_index)
    if(bars_since_formed > g_max_rp_age_bars)
       penalty += 10.0;
 
+   // Cap decay penalty — prevents strong zones from being killed too early
+   // Max -35 matches reaction strength max (+35), keeping scoring balanced
+   penalty = MathMin(penalty, 35.0);
+
    // Deactivate extremely old low-score RP
    if(bars_since_formed > 2 * g_max_rp_age_bars && rp.final_score < 80.0)
    {

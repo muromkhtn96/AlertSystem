@@ -139,9 +139,9 @@ void DrawRPZone(int rp_index)
    //--- 1. FILL RECTANGLE (soft transparent body)
    if(ObjectFind(0, name_fill) < 0)
    {
-      ObjectCreate(0, name_fill, OBJ_RECTANGLE, 0,
-                   time_start, rp.zone_high, time_end, rp.zone_low);
-      g_object_count++;
+      if(ObjectCreate(0, name_fill, OBJ_RECTANGLE, 0,
+                   time_start, rp.zone_high, time_end, rp.zone_low))
+         g_object_count++;
       ObjectSetInteger(0, name_fill, OBJPROP_FILL, true);
       ObjectSetInteger(0, name_fill, OBJPROP_BACK, true);
       ObjectSetInteger(0, name_fill, OBJPROP_SELECTABLE, false);
@@ -155,9 +155,9 @@ void DrawRPZone(int rp_index)
    //--- 2. TOP EDGE LINE (zone_high boundary — crisp, visible)
    if(ObjectFind(0, name_top) < 0)
    {
-      ObjectCreate(0, name_top, OBJ_TREND, 0,
-                   time_start, rp.zone_high, time_end, rp.zone_high);
-      g_object_count++;
+      if(ObjectCreate(0, name_top, OBJ_TREND, 0,
+                   time_start, rp.zone_high, time_end, rp.zone_high))
+         g_object_count++;
       ObjectSetInteger(0, name_top, OBJPROP_RAY_LEFT, false);
       ObjectSetInteger(0, name_top, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, name_top, OBJPROP_SELECTABLE, false);
@@ -172,9 +172,9 @@ void DrawRPZone(int rp_index)
    //--- 3. BOTTOM EDGE LINE (zone_low boundary)
    if(ObjectFind(0, name_bot) < 0)
    {
-      ObjectCreate(0, name_bot, OBJ_TREND, 0,
-                   time_start, rp.zone_low, time_end, rp.zone_low);
-      g_object_count++;
+      if(ObjectCreate(0, name_bot, OBJ_TREND, 0,
+                   time_start, rp.zone_low, time_end, rp.zone_low))
+         g_object_count++;
       ObjectSetInteger(0, name_bot, OBJPROP_RAY_LEFT, false);
       ObjectSetInteger(0, name_bot, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, name_bot, OBJPROP_SELECTABLE, false);
@@ -186,8 +186,11 @@ void DrawRPZone(int rp_index)
       ObjectSetInteger(0, name_bot, OBJPROP_TIME, 1, time_end);
    }
 
-   //--- Update visual properties when dirty
-   if(g_rp_dirty[rp_index])
+   //--- Update visual properties when state changed
+   //    NOTE: g_rp_dirty may be cleared by scoring before drawing runs.
+   //    RedrawChangedRP() already tracks state changes via g_prev_* arrays,
+   //    so we always update properties when this function is called (it's
+   //    only called when RedrawChangedRP detects a change).
    {
       // Fill
       ObjectSetInteger(0, name_fill, OBJPROP_COLOR, fill_color);
@@ -231,17 +234,14 @@ void DrawConfluenceGlow(int conf_index)
    datetime time_start = 0;
    datetime time_end   = TimeCurrent() + PeriodSeconds() * 20;
 
-   //--- Find earliest RP time in zone
+   //--- Find earliest RP time in zone (O(1) lookup per RP via ID map)
    for(int k = 0; k < zone.rp_count; k++)
    {
-      for(int r = 0; r < g_rp_count; r++)
+      int r = FindRPIndexByID(zone.rp_ids[k]);
+      if(r >= 0)
       {
-         if(g_rp_array[r].id == zone.rp_ids[k])
-         {
-            if(time_start == 0 || g_rp_array[r].time_formed < time_start)
-               time_start = g_rp_array[r].time_formed;
-            break;
-         }
+         if(time_start == 0 || g_rp_array[r].time_formed < time_start)
+            time_start = g_rp_array[r].time_formed;
       }
    }
    if(time_start == 0) time_start = TimeCurrent() - PeriodSeconds() * 50;
@@ -250,10 +250,10 @@ void DrawConfluenceGlow(int conf_index)
    string name_outer = OBJECT_PREFIX + "GLOW_OUT_" + IntegerToString(zone.id);
    if(ObjectFind(0, name_outer) < 0)
    {
-      ObjectCreate(0, name_outer, OBJ_RECTANGLE, 0,
+      if(ObjectCreate(0, name_outer, OBJ_RECTANGLE, 0,
                    time_start, zone.zone_high + pip_ext,
-                   time_end, zone.zone_low - pip_ext);
-      g_object_count++;
+                   time_end, zone.zone_low - pip_ext))
+         g_object_count++;
    }
    else
    {
@@ -272,10 +272,10 @@ void DrawConfluenceGlow(int conf_index)
    string name_mid = OBJECT_PREFIX + "GLOW_MID_" + IntegerToString(zone.id);
    if(ObjectFind(0, name_mid) < 0)
    {
-      ObjectCreate(0, name_mid, OBJ_RECTANGLE, 0,
+      if(ObjectCreate(0, name_mid, OBJ_RECTANGLE, 0,
                    time_start, zone.zone_high + pip_mid,
-                   time_end, zone.zone_low - pip_mid);
-      g_object_count++;
+                   time_end, zone.zone_low - pip_mid))
+         g_object_count++;
    }
    else
    {
@@ -294,10 +294,10 @@ void DrawConfluenceGlow(int conf_index)
    string name_core = OBJECT_PREFIX + "GLOW_CORE_" + IntegerToString(zone.id);
    if(ObjectFind(0, name_core) < 0)
    {
-      ObjectCreate(0, name_core, OBJ_RECTANGLE, 0,
+      if(ObjectCreate(0, name_core, OBJ_RECTANGLE, 0,
                    time_start, zone.zone_high,
-                   time_end, zone.zone_low);
-      g_object_count++;
+                   time_end, zone.zone_low))
+         g_object_count++;
    }
    else
    {
@@ -333,6 +333,51 @@ string GetLevelIcon(ENUM_RP_LEVEL level)
 //|                                                                    |
 //| Format: PREMIUM | CONFLUENCE 124 | H1 | Tested:0x | Fresh         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Label collision tracking — prevents overlapping labels             |
+//+------------------------------------------------------------------+
+static double g_label_placed_prices[];
+static int    g_label_placed_count = 0;
+
+void ResetLabelCollision()
+{
+   g_label_placed_count = 0;
+}
+
+double AdjustLabelPrice(double price)
+{
+   //--- Min spacing: label font height in price units ≈ 1.5x ATR/chart_height
+   //    Simplified: use zone_width_pips as min label spacing
+   double min_spacing = PipsToPrice(g_zone_width_pips * 1.5);
+   if(min_spacing <= 0.0) min_spacing = PipsToPrice(5);
+
+   double adjusted = price;
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      bool collision = false;
+      for(int i = 0; i < g_label_placed_count; i++)
+      {
+         if(MathAbs(adjusted - g_label_placed_prices[i]) < min_spacing)
+         {
+            //--- Nudge down (lower price) to avoid overlap
+            adjusted = g_label_placed_prices[i] - min_spacing;
+            collision = true;
+            break;
+         }
+      }
+      if(!collision) break;
+   }
+
+   //--- Track this label position
+   if(g_label_placed_count < ArraySize(g_label_placed_prices))
+   {
+      g_label_placed_prices[g_label_placed_count] = adjusted;
+      g_label_placed_count++;
+   }
+
+   return adjusted;
+}
+
 void DrawRPLabel(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return;
@@ -342,8 +387,8 @@ void DrawRPLabel(int rp_index)
 
    string name = OBJECT_PREFIX + "LBL_" + IntegerToString(rp.id);
 
-   //--- Position: center of zone
-   double label_price = (rp.zone_high + rp.zone_low) / 2.0;
+   //--- Position: center of zone, adjusted to avoid collision
+   double label_price = AdjustLabelPrice((rp.zone_high + rp.zone_low) / 2.0);
 
    //--- Build label: LEVEL | TYPE SCORE | TF | Tested:Nx | Status
    string status_str;
@@ -371,8 +416,8 @@ void DrawRPLabel(int rp_index)
 
    if(ObjectFind(0, name) < 0)
    {
-      ObjectCreate(0, name, OBJ_TEXT, 0, label_time, label_price);
-      g_object_count++;
+      if(ObjectCreate(0, name, OBJ_TEXT, 0, label_time, label_price))
+         g_object_count++;
    }
    else
    {
@@ -410,10 +455,10 @@ void CreateSessionObjects()
       string name = OBJECT_PREFIX + "SESS_" + sessions[i];
       if(ObjectFind(0, name) < 0)
       {
-         ObjectCreate(0, name, OBJ_RECTANGLE, 0,
+         if(ObjectCreate(0, name, OBJ_RECTANGLE, 0,
                       TimeCurrent() - PeriodSeconds() * 100, 0,
-                      TimeCurrent(), 0);
-         g_object_count++;
+                      TimeCurrent(), 0))
+            g_object_count++;
       }
 
       ObjectSetInteger(0, name, OBJPROP_COLOR, BlendColor(sess_colors[i], bg, 10));
@@ -491,6 +536,10 @@ void InitDrawState()
    ArrayInitialize(g_prev_role_rev, false);
    ArrayInitialize(g_prev_opacity, -1.0);
 
+   //--- Label collision tracking array
+   ArrayResize(g_label_placed_prices, MAX_RP_COUNT);
+   ArrayInitialize(g_label_placed_prices, 0.0);
+
    g_draw_state_initialized = true;
 }
 
@@ -501,6 +550,14 @@ void RedrawChangedRP()
 {
    if(!g_draw_state_initialized)
       InitDrawState();
+
+   //--- Reset label collision tracker for this redraw pass
+   ResetLabelCollision();
+
+   //--- Extend time_end for all active zones every call (lightweight)
+   //    This ensures zones always reach current candle + 20 bars ahead,
+   //    even when no state change triggers a full redraw.
+   datetime extend_end = TimeCurrent() + PeriodSeconds() * 20;
 
    for(int i = 0; i < g_rp_count; i++)
    {
@@ -515,20 +572,35 @@ void RedrawChangedRP()
       if(g_prev_role_rev[i] != rp.is_role_reversed) changed = true;
       if(MathAbs(g_prev_opacity[i] - rp.display_opacity) > 1.0) changed = true;
 
-      if(!changed) continue;
-
       //--- RP became inactive → delete its objects
       if(!rp.is_active && g_prev_active[i])
       {
          DeleteRPObjects(rp.id);
+         changed = true;  // Force state update
       }
       else if(rp.is_active)
       {
-         DrawRPZone(i);
-         //--- Always draw labels for Premium + Level1; others only in full mode
-         if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-            DrawRPLabel(i);
+         if(changed)
+         {
+            //--- Full redraw: color, edges, prices, time
+            DrawRPZone(i);
+            if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
+               DrawRPLabel(i);
+         }
+         else
+         {
+            //--- Lightweight: only extend zone time_end forward
+            string id_str = IntegerToString(rp.id);
+            string nf = OBJECT_PREFIX + "ZONE_"   + id_str;
+            string nt = OBJECT_PREFIX + "EDGE_H_" + id_str;
+            string nb = OBJECT_PREFIX + "EDGE_L_" + id_str;
+            if(ObjectFind(0, nf) >= 0) ObjectSetInteger(0, nf, OBJPROP_TIME, 1, extend_end);
+            if(ObjectFind(0, nt) >= 0) ObjectSetInteger(0, nt, OBJPROP_TIME, 1, extend_end);
+            if(ObjectFind(0, nb) >= 0) ObjectSetInteger(0, nb, OBJPROP_TIME, 1, extend_end);
+         }
       }
+
+      if(!changed) continue;
 
       //--- Update previous state
       g_prev_scores[i]   = rp.final_score;
@@ -564,8 +636,8 @@ void DeleteRPObjects(int rp_id)
       string oname = OBJECT_PREFIX + obj_names[i] + id_str;
       if(ObjectFind(0, oname) >= 0)
       {
-         ObjectDelete(0, oname);
-         g_object_count--;
+         if(ObjectDelete(0, oname))
+            g_object_count--;
       }
    }
 }
@@ -584,27 +656,53 @@ void DeleteAllObjects()
 //+------------------------------------------------------------------+
 void EnforceObjectLimit()
 {
-   while(g_object_count > MAX_CHART_OBJECTS)
-   {
-      //--- Find lowest-score active RP
-      int lowest_idx = -1;
-      double lowest_score = DBL_MAX;
+   if(g_object_count <= MAX_CHART_OBJECTS) return;
 
-      for(int i = 0; i < g_rp_count; i++)
+   //--- Estimate how many RPs to remove (each RP = up to 3 objects)
+   int excess = g_object_count - MAX_CHART_OBJECTS;
+   int to_remove = (excess / 3) + 2;  // Remove enough in one pass + buffer
+   const int MAX_BATCH = 10;
+   if(to_remove > MAX_BATCH) to_remove = MAX_BATCH;
+
+   //--- Collect lowest-score non-confluence RPs
+   int remove_indices[];
+   double remove_scores[];
+   ArrayResize(remove_indices, to_remove);
+   ArrayResize(remove_scores, to_remove);
+   ArrayInitialize(remove_scores, DBL_MAX);
+   int found = 0;
+
+   for(int i = 0; i < g_rp_count; i++)
+   {
+      if(!g_rp_array[i].is_active) continue;
+      if(g_rp_array[i].is_confluence) continue;
+
+      double score = g_rp_array[i].final_score;
+
+      //--- Insert into sorted removal list (ascending by score)
+      if(found < to_remove)
       {
-         if(!g_rp_array[i].is_active) continue;
-         if(g_rp_array[i].is_confluence) continue; // protect confluence
-         if(g_rp_array[i].final_score < lowest_score)
+         remove_indices[found] = i;
+         remove_scores[found]  = score;
+         found++;
+      }
+      else
+      {
+         //--- Replace the highest score in removal list if this one is lower
+         int worst = 0;
+         for(int j = 1; j < to_remove; j++)
+            if(remove_scores[j] > remove_scores[worst]) worst = j;
+         if(score < remove_scores[worst])
          {
-            lowest_score = g_rp_array[i].final_score;
-            lowest_idx = i;
+            remove_indices[worst] = i;
+            remove_scores[worst]  = score;
          }
       }
-
-      if(lowest_idx < 0) break; // cannot free more
-
-      DeleteRPObjects(g_rp_array[lowest_idx].id);
    }
+
+   //--- Batch delete all collected RPs
+   for(int i = 0; i < found && g_object_count > MAX_CHART_OBJECTS; i++)
+      DeleteRPObjects(g_rp_array[remove_indices[i]].id);
 }
 
 //+------------------------------------------------------------------+

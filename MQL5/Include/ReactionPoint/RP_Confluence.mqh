@@ -365,8 +365,16 @@ void MergeOverlappingConfluenceZones()
    double merge_dist = PipsToPrice(g_confluence_merge_pips);
 
    bool merged = true;
+   int merge_iterations = 0;
+   const int MAX_MERGE_ITERATIONS = 10;
    while(merged)
    {
+      if(merge_iterations >= MAX_MERGE_ITERATIONS)
+      {
+         Print("WARNING: MergeOverlappingConfluenceZones — hit iteration limit (", MAX_MERGE_ITERATIONS, "), stopping");
+         break;
+      }
+      merge_iterations++;
       merged = false;
       for(int i = 0; i < g_confluence_count && !merged; i++)
       {
@@ -410,13 +418,14 @@ void MergeOverlappingConfluenceZones()
                }
             }
 
-            //--- Re-point loser's RPs to winner zone
-            for(int k = 0; k < g_rp_count; k++)
+            //--- Re-point loser's RPs to winner zone (O(1) lookup via ID map)
+            for(int k = 0; k < g_confluence_array[loser].rp_count; k++)
             {
-               if(g_rp_array[k].confluence_id == g_confluence_array[loser].id)
+               int rp_idx = FindRPIndexByID(g_confluence_array[loser].rp_ids[k]);
+               if(rp_idx >= 0)
                {
-                  g_rp_array[k].confluence_id = g_confluence_array[winner].id;
-                  g_rp_dirty[k] = true;
+                  g_rp_array[rp_idx].confluence_id = g_confluence_array[winner].id;
+                  g_rp_dirty[rp_idx] = true;
                }
             }
 
@@ -444,24 +453,17 @@ void ApplyConfluenceScoring()
       SConfluenceZone zone = g_confluence_array[z];
       if(zone.rp_count <= 0) continue;
 
-      //--- Find RP with highest score in zone
+      //--- Find RP with highest score in zone (O(1) lookup per RP via ID map)
       int best_idx = -1;
       double best_score = -1.0;
 
       for(int k = 0; k < zone.rp_count; k++)
       {
-         //--- Find RP array index by ID
-         for(int r = 0; r < g_rp_count; r++)
+         int r = FindRPIndexByID(zone.rp_ids[k]);
+         if(r >= 0 && g_rp_array[r].is_active && g_rp_array[r].final_score > best_score)
          {
-            if(g_rp_array[r].id == zone.rp_ids[k] && g_rp_array[r].is_active)
-            {
-               if(g_rp_array[r].final_score > best_score)
-               {
-                  best_score = g_rp_array[r].final_score;
-                  best_idx = r;
-               }
-               break;
-            }
+            best_score = g_rp_array[r].final_score;
+            best_idx = r;
          }
       }
 
@@ -506,16 +508,13 @@ void HandlePartialBreakout(int rp_id)
 
       if(!found) continue;
 
-      //--- Detach the broken RP
-      for(int r = 0; r < g_rp_count; r++)
+      //--- Detach the broken RP (O(1) lookup via ID map)
+      int detach_idx = FindRPIndexByID(rp_id);
+      if(detach_idx >= 0)
       {
-         if(g_rp_array[r].id == rp_id)
-         {
-            g_rp_array[r].is_confluence = false;
-            g_rp_array[r].confluence_id = -1;
-            g_rp_dirty[r] = true;
-            break;
-         }
+         g_rp_array[detach_idx].is_confluence = false;
+         g_rp_array[detach_idx].confluence_id = -1;
+         g_rp_dirty[detach_idx] = true;
       }
 
       //--- Recalc multiplier/bonus or dissolve zone
@@ -524,15 +523,12 @@ void HandlePartialBreakout(int rp_id)
          //--- Dissolve zone: detach remaining RP
          if(zone.rp_count == 1)
          {
-            for(int r = 0; r < g_rp_count; r++)
+            int last_idx = FindRPIndexByID(zone.rp_ids[0]);
+            if(last_idx >= 0)
             {
-               if(g_rp_array[r].id == zone.rp_ids[0])
-               {
-                  g_rp_array[r].is_confluence = false;
-                  g_rp_array[r].confluence_id = -1;
-                  g_rp_dirty[r] = true;
-                  break;
-               }
+               g_rp_array[last_idx].is_confluence = false;
+               g_rp_array[last_idx].confluence_id = -1;
+               g_rp_dirty[last_idx] = true;
             }
          }
 
@@ -549,17 +545,12 @@ void HandlePartialBreakout(int rp_id)
          else if(zone.rp_count >= 3) { zone.multiplier = 1.5; zone.bonus = 25.0; zone.is_premium = false; }
          else if(zone.rp_count >= 2) { zone.multiplier = 1.3; zone.bonus = 10.0; zone.is_premium = false; }
 
-         //--- Mark remaining RPs dirty for re-score
+         //--- Mark remaining RPs dirty for re-score (O(1) lookup via ID map)
          for(int k = 0; k < zone.rp_count; k++)
          {
-            for(int r = 0; r < g_rp_count; r++)
-            {
-               if(g_rp_array[r].id == zone.rp_ids[k])
-               {
-                  g_rp_dirty[r] = true;
-                  break;
-               }
-            }
+            int dirty_idx = FindRPIndexByID(zone.rp_ids[k]);
+            if(dirty_idx >= 0)
+               g_rp_dirty[dirty_idx] = true;
          }
 
          //--- Write modified zone back to array
@@ -642,11 +633,16 @@ double GetTrendAlignmentScore(ENUM_RP_TYPE rp_type)
       if(!g_htf_trends[i].is_valid) continue;
       total++;
 
+      // TREND_NONE = neutral — neither aligned nor counter
+      // Only explicit directional agreement counts as alignment
+      if(g_htf_trends[i].trend == TREND_NONE)
+         continue;  // Skip neutral TFs — don't inflate alignment count
+
       bool is_aligned;
       if(rp_type == RP_SUPPORT)
-         is_aligned = (g_htf_trends[i].trend == TREND_UP || g_htf_trends[i].trend == TREND_NONE);
+         is_aligned = (g_htf_trends[i].trend == TREND_UP);
       else // RP_RESISTANCE
-         is_aligned = (g_htf_trends[i].trend == TREND_DOWN || g_htf_trends[i].trend == TREND_NONE);
+         is_aligned = (g_htf_trends[i].trend == TREND_DOWN);
 
       if(is_aligned) aligned++;
       else counter++;
@@ -654,18 +650,33 @@ double GetTrendAlignmentScore(ENUM_RP_TYPE rp_type)
 
    if(total == 0) return 0.0;
 
-   //--- All TFs agree
-   if(aligned == total) return 20.0;
+   // directional = TFs with clear trend (excludes TREND_NONE)
+   int directional = aligned + counter;
 
-   //--- 2 out of 3 aligned
-   if(aligned >= total - 1) return 10.0;
+   //--- No directional TFs (all TREND_NONE) → neutral
+   if(directional == 0) return 0.0;
+
+   //--- All directional TFs agree with RP
+   if(aligned == directional && aligned >= 2) return 20.0;
+   if(aligned == directional && aligned == 1) return 10.0;
+
+   //--- Majority aligned (2 of 3 directional, or 1 aligned + 0 counter + neutrals)
+   if(aligned > counter) return 10.0;
 
    //--- Counter-trend
-   double penalty = (counter == total) ? -25.0 : -15.0;
+   double penalty = (aligned == 0) ? -25.0 : -15.0;
 
-   //--- CHoCH exception: reduce penalty 50% if recent structure change
-   if(g_choch_detected && g_last_choch_bar <= 10)
+   //--- CHoCH exception: reduce penalty with gradual fade
+   //    Bar 1-5: 50% reduction, bar 6-15: fade from 50% reduction to full penalty
+   //    Multiplier: bar 5 = 0.5, bar 15 = 1.0 (no reduction = full penalty)
+   if(g_choch_detected && g_last_choch_bar <= 5)
       penalty *= 0.5;
+   else if(g_choch_detected && g_last_choch_bar <= 15)
+   {
+      // Linear fade: 0.5 (bar 6) → 1.0 (bar 15)
+      double fade = 0.5 + 0.5 * (double)(g_last_choch_bar - 5) / 10.0;
+      penalty *= fade;
+   }
 
    return penalty;
 }

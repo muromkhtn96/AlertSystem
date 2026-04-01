@@ -1,195 +1,508 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>RP v3.0 — Zone UI</title>
+<title>RP System — Wick Filter & OB Zone UI Demo</title>
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:#0e1117; color:#c8cdd8; font-family:'Consolas','Courier New',monospace; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0e1117; color: #b4bec8; font-family: 'Consolas', 'Courier New', monospace; overflow-x: hidden; }
 
-  .chart {
-    position:relative; width:1100px; height:580px;
-    margin:30px auto; background:#131722;
-    border:1px solid #1e222d; border-radius:4px; overflow:hidden;
+  .main { display: flex; gap: 0; height: 100vh; }
+
+  /* ── Chart Area ── */
+  .chart-area { flex: 1; position: relative; overflow: hidden; }
+  .chart-bg { width: 100%; height: 100%; }
+
+  /* Grid */
+  .grid-line { stroke: #1a2030; stroke-width: 1; }
+  .price-label { fill: #556070; font-size: 11px; font-family: Consolas, monospace; }
+
+  /* Candles */
+  .candle-bull-body { fill: #2a2a35; stroke: #3cba6e; stroke-width: 1.2; }
+  .candle-bull-wick { stroke: #3cba6e; stroke-width: 1.2; }
+  .candle-bear-body { fill: #d14b4b; stroke: #d14b4b; stroke-width: 1.2; }
+  .candle-bear-wick { stroke: #d14b4b; stroke-width: 1.2; }
+
+  /* Zones */
+  .zone-support-fill { fill: rgba(70,190,140,0.18); }
+  .zone-support-edge { stroke: rgba(70,190,140,0.7); stroke-width: 2; }
+  .zone-resistance-fill { fill: rgba(210,100,100,0.18); }
+  .zone-resistance-edge { stroke: rgba(210,100,100,0.7); stroke-width: 2; }
+  .zone-wf-fill { fill: rgba(70,190,140,0.25); }
+  .zone-wf-edge { stroke: rgba(70,190,140,0.85); stroke-width: 2; stroke-dasharray: 6 3; }
+  .zone-ob-fill { fill: rgba(150,120,210,0.22); }
+  .zone-ob-edge { stroke: rgba(150,120,210,0.8); stroke-width: 2; }
+
+  /* Labels */
+  .zone-label { font-family: Consolas, monospace; font-size: 10px; }
+  .annotation { font-family: Consolas, monospace; font-size: 11px; fill: #8090a8; }
+  .annotation-highlight { fill: #e8c84a; }
+  .annotation-line { stroke: #3a4560; stroke-width: 1; stroke-dasharray: 4 3; }
+  .arrow-marker { fill: #5a6a80; }
+
+  /* ── Dashboard ── */
+  .dashboard {
+    width: 340px; min-width: 340px;
+    background: rgba(16,20,28,0.95);
+    border-left: 1px solid #283042;
+    padding: 12px 14px;
+    font-size: 12px;
+    display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
   }
-
-  .gl { position:absolute; left:0; right:0; height:1px; background:#1a1e2a; }
-  .pl { position:absolute; right:6px; font-size:9px; color:#3a3f50; transform:translateY(-50%); }
-
-  .c { position:absolute; width:7px; }
-  .c .w { position:absolute; width:1px; left:50%; transform:translateX(-50%); }
-  .c .b { position:absolute; left:1px; right:1px; border-radius:1px; min-height:1px; }
-  .c.bu .b { background:#26a69a; } .c.bu .w { background:#26a69a; }
-  .c.be .b { background:#ef5350; } .c.be .w { background:#ef5350; }
-
-  /* ═══ ZONES: visible fill + crisp edge lines ═══ */
-  .z { position:absolute; }
-  .z .f { position:absolute; inset:0; }
-  .z .et, .z .eb { position:absolute; left:0; right:0; }
-  .z .et { top:0; } .z .eb { bottom:0; }
-
-  /* Support — teal */
-  .z.s .f { background:rgba(70,190,140,0.22); }
-  .z.s.l1 .f { background:rgba(70,190,140,0.30); }
-  .z.s .et,.z.s .eb { height:1px; background:rgba(70,190,140,0.60); }
-  .z.s.l1 .et,.z.s.l1 .eb { height:2px; background:rgba(70,190,140,0.80); }
-
-  /* Resistance — coral */
-  .z.r .f { background:rgba(210,100,100,0.22); }
-  .z.r.l1 .f { background:rgba(210,100,100,0.30); }
-  .z.r .et,.z.r .eb { height:1px; background:rgba(210,100,100,0.60); }
-  .z.r.l1 .et,.z.r.l1 .eb { height:2px; background:rgba(210,100,100,0.80); }
-
-  /* Premium — gold */
-  .z.pm .f { background:rgba(255,210,80,0.28); }
-  .z.pm .et,.z.pm .eb { height:3px; background:rgba(255,210,80,0.85); }
-
-  /* Confluence glow */
-  .z.cf::before { content:''; position:absolute; inset:-4px; background:rgba(150,120,210,0.07); z-index:-1; }
-  .z.cf .f { background:rgba(150,120,210,0.24); }
-  .z.cf .et,.z.cf .eb { height:2px; background:rgba(150,120,210,0.70); }
-
-  /* Role Reversal — muted magenta dashed */
-  .z.rr .f { background:rgba(170,110,170,0.20); }
-  .z.rr .et,.z.rr .eb { height:0; border-top:2px dashed rgba(170,110,170,0.60); }
-
-  .z.fade { opacity:0.50; }
-
-  /* Labels — original readable format, right-aligned inside zone */
-  .zl {
-    position:absolute; right:24%; font-size:10px; white-space:nowrap;
-    text-align:right; opacity:0.90;
+  .dash-header { color: #b4bee2; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+  .dash-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; line-height: 1.5; }
+  .dash-sep { border-top: 1px solid #283042; margin: 4px 0; }
+  .dash-dim { color: #5a6478; }
+  .dash-green { color: #50dc78; }
+  .dash-red { color: #dc5050; }
+  .dash-gold { color: #ffd250; }
+  .dash-teal { color: #46be8c; }
+  .dash-coral { color: #d26464; }
+  .dash-purple { color: #9678d2; }
+  .dash-gray { color: #a0aab8; }
+  .dash-section-title { color: #6878a0; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+  .dash-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; font-weight: bold; margin-left: 4px;
   }
+  .badge-ob { background: rgba(150,120,210,0.25); color: #b8a0e8; border: 1px solid rgba(150,120,210,0.4); }
+  .badge-wf { background: rgba(70,190,140,0.2); color: #60d0a0; border: 1px solid rgba(70,190,140,0.35); }
+  .badge-fresh { background: rgba(80,220,120,0.15); color: #50dc78; border: 1px solid rgba(80,220,120,0.3); }
+  .badge-tested { background: rgba(255,210,80,0.15); color: #ffd250; border: 1px solid rgba(255,210,80,0.3); }
 
-  .cs { color:#46be8c; } .cr { color:#d26464; } .cp { color:#ffd250; }
-  .ccf { color:#9678d2; } .crr { color:#aa6eaa; }
-
-  /* Dashboard */
-  .dash {
-    position:absolute; top:8px; right:8px; width:250px;
-    background:rgba(16,20,28,0.92); border:1px solid #28303e;
-    border-radius:3px; padding:6px 8px; font-size:10px;
-    line-height:1.65; backdrop-filter:blur(4px);
+  /* Zone detail cards */
+  .zone-card {
+    background: rgba(30,36,50,0.6);
+    border: 1px solid #283042;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin: 3px 0;
   }
-  .d-t { color:#a0a8c0; font-size:10px; }
-  .d-sep { color:#252d3a; font-size:7px; letter-spacing:0.5px; line-height:1.0; }
-  .d-dim { color:#5a6580; font-size:9px; }
-  .d-rp { font-size:10px; }
-  .cg { color:#50dc78; } .cdm { color:#5a6580; }
+  .zone-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .zone-card-row { display: flex; justify-content: space-between; font-size: 11px; color: #7888a0; padding: 1px 0; }
 
-  .leg { width:1100px; margin:0 auto 30px; display:flex; gap:20px; flex-wrap:wrap; font-size:10px; color:#666; justify-content:center; }
-  .li { display:flex; align-items:center; gap:5px; }
-  .sw { width:28px; height:10px; border-radius:1px; }
+  /* Legend */
+  .legend {
+    position: absolute; bottom: 16px; left: 16px;
+    background: rgba(16,20,28,0.92); border: 1px solid #283042; border-radius: 6px;
+    padding: 12px 16px; display: flex; gap: 20px; font-size: 11px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 28px; height: 10px; border-radius: 2px; }
 
-  h2 { text-align:center; color:#8890a4; margin:30px 0 4px; font-size:14px; font-weight:400; }
-  .sub { text-align:center; color:#4a5060; font-size:11px; margin-bottom:15px; }
+  /* Title bar */
+  .title-bar {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(16,20,28,0.85); border: 1px solid #283042; border-radius: 6px;
+    padding: 8px 24px; text-align: center;
+  }
+  .title-bar h1 { font-size: 14px; color: #c8d0e0; font-weight: bold; }
+  .title-bar p { font-size: 11px; color: #6878a0; margin-top: 2px; }
 </style>
 </head>
 <body>
+<div class="main">
 
-<h2>REACTION POINT v3.0 &mdash; P28 UI Redesign</h2>
-<p class="sub">Visible zone fill + Edge lines + Original readable labels</p>
+<!-- ════════════════════ CHART AREA ════════════════════ -->
+<div class="chart-area">
+  <svg class="chart-bg" viewBox="0 0 1100 700" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrowDown" markerWidth="8" markerHeight="8" refX="4" refY="8" orient="auto">
+        <path d="M1,0 L4,8 L7,0" class="arrow-marker"/>
+      </marker>
+    </defs>
 
-<div class="chart">
+    <!-- Grid lines -->
+    <g>
+      <line x1="60" y1="100" x2="1040" y2="100" class="grid-line"/>
+      <line x1="60" y1="180" x2="1040" y2="180" class="grid-line"/>
+      <line x1="60" y1="260" x2="1040" y2="260" class="grid-line"/>
+      <line x1="60" y1="340" x2="1040" y2="340" class="grid-line"/>
+      <line x1="60" y1="420" x2="1040" y2="420" class="grid-line"/>
+      <line x1="60" y1="500" x2="1040" y2="500" class="grid-line"/>
+      <line x1="60" y1="580" x2="1040" y2="580" class="grid-line"/>
+    </g>
 
-  <div class="gl" style="top:12%;"></div><div class="pl" style="top:12%;">1.10500</div>
-  <div class="gl" style="top:28%;"></div><div class="pl" style="top:28%;">1.10200</div>
-  <div class="gl" style="top:44%;"></div><div class="pl" style="top:44%;">1.09900</div>
-  <div class="gl" style="top:60%;"></div><div class="pl" style="top:60%;">1.09600</div>
-  <div class="gl" style="top:76%;"></div><div class="pl" style="top:76%;">1.09300</div>
-  <div class="gl" style="top:90%;"></div><div class="pl" style="top:90%;">1.09050</div>
+    <!-- Price labels (right side) -->
+    <text x="1050" y="104" class="price-label">1.1080</text>
+    <text x="1050" y="184" class="price-label">1.1060</text>
+    <text x="1050" y="264" class="price-label">1.1040</text>
+    <text x="1050" y="344" class="price-label">1.1020</text>
+    <text x="1050" y="424" class="price-label">1.1000</text>
+    <text x="1050" y="504" class="price-label">1.0980</text>
+    <text x="1050" y="584" class="price-label">1.0960</text>
 
-  <!-- ═══ ZONES with visible fill + edge lines + readable labels ═══ -->
+    <!-- ════ Section dividers ════ -->
+    <line x1="355" y1="70" x2="355" y2="635" stroke="#1e2840" stroke-width="1" stroke-dasharray="6 4"/>
+    <line x1="735" y1="70" x2="735" y2="635" stroke="#1e2840" stroke-width="1" stroke-dasharray="6 4"/>
 
-  <!-- PREMIUM Confluence (gold) -->
-  <div class="z pm cf" style="left:4%;right:24%;top:62%;height:5%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl cp" style="top:63.5%;">PREMIUM | CONFLUENCE 124 | H1 | Tested:0x | Fresh</div>
+    <!-- Section titles -->
+    <rect x="100" y="68" width="140" height="20" rx="3" fill="rgba(16,20,28,0.9)" stroke="#283042"/>
+    <text x="170" y="82" class="annotation" text-anchor="middle" font-size="10" fill="#8898b0">A. Normal Zone</text>
 
-  <!-- Resistance LV1 -->
-  <div class="z r l1" style="left:12%;right:24%;top:18%;height:4%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl cr" style="top:19%;">LV1 | RESISTANCE 92 | H1 | Tested:2x | Active</div>
+    <rect x="430" y="68" width="160" height="20" rx="3" fill="rgba(16,20,28,0.9)" stroke="#283042"/>
+    <text x="510" y="82" class="annotation" text-anchor="middle" font-size="10" fill="#60d0a0">B. Wick Filter (WF)</text>
 
-  <!-- Support LV1 -->
-  <div class="z s l1" style="left:28%;right:24%;top:73%;height:4%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl cs" style="top:74%;">LV1 | SUPPORT 88 | H4 | Tested:1x | Active</div>
+    <rect x="830" y="68" width="160" height="20" rx="3" fill="rgba(16,20,28,0.9)" stroke="#283042"/>
+    <text x="910" y="82" class="annotation" text-anchor="middle" font-size="10" fill="#b8a0e8">C. Order Block (OB)</text>
 
-  <!-- Role Reversal -->
-  <div class="z rr" style="left:8%;right:24%;top:40%;height:3.2%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl crr" style="top:40.5%;">PREMIUM | CONFLUENCE 150 | H1 | Tested:0x | RoleRev</div>
 
-  <!-- Support LV2 (faded) -->
-  <div class="z s fade" style="left:42%;right:24%;top:83%;height:3%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl cs fade" style="top:83.5%;">LV2 | SUPPORT 62 | M30 | Tested:1x | Decay:-20</div>
+    <!-- ──── SECTION A: Normal Support Zone ──── -->
+    <!-- Swing candle: small wick, body-based zone -->
+    <line x1="150" y1="330" x2="150" y2="490" class="candle-bull-wick"/>
+    <rect x="140" y="360" width="20" height="100" class="candle-bull-body" rx="1"/>
 
-  <!-- Resistance LV2 (faded) -->
-  <div class="z r fade" style="left:35%;right:24%;top:9%;height:2.8%;">
-    <div class="f"></div><div class="et"></div><div class="eb"></div>
-  </div>
-  <div class="zl cr fade" style="top:9.5%;">LV2 | RESISTANCE 55 | H1 | Tested:0x | Fresh</div>
+    <!-- Body / Wick annotation -->
+    <line x1="115" y1="360" x2="130" y2="360" class="annotation-line"/>
+    <line x1="115" y1="460" x2="130" y2="460" class="annotation-line"/>
+    <line x1="122" y1="360" x2="122" y2="460" class="annotation-line"/>
+    <text x="110" y="415" class="annotation" font-size="8" text-anchor="end">body</text>
 
-  <!-- Candles -->
-  <script>
-    const ch=document.querySelector('.chart');
-    [
-      [5,1,30,34,40,44],[7,0,32,35,42,46],[9,1,28,32,37,42],[11,1,26,29,35,40],
-      [13,0,27,30,38,42],[15,1,32,36,40,45],[17,0,29,32,40,44],[19,1,24,28,32,38],
-      [21,1,22,25,30,36],[23,0,24,27,35,40],[25,1,27,30,34,39],[27,0,26,29,37,42],
-      [29,1,30,34,38,43],[31,1,28,31,35,40],[33,0,30,33,40,45],[35,1,32,36,40,44],
-      [37,0,34,37,44,48],[39,1,36,40,44,49],[41,0,32,35,42,46],[43,1,30,33,38,43],
-      [45,1,27,30,35,40],[47,0,29,32,39,44],[49,1,32,36,40,45],[51,1,30,33,37,42],
-      [53,0,32,35,42,46],[55,1,34,38,42,47],[57,0,36,39,46,50],[59,1,38,42,46,51],
-      [61,0,34,37,44,48],[63,1,32,35,40,45],[65,1,30,33,37,42],[67,0,32,35,42,46],
-      [69,1,28,31,36,41],[71,0,30,33,40,44],
-    ].forEach(c=>{
-      const d=document.createElement('div');
-      d.className='c '+(c[1]?'bu':'be');
-      d.style.cssText='left:'+c[0]+'%;';
-      d.innerHTML='<div class="w" style="top:'+c[2]+'%;bottom:'+(100-c[5])+'%;"></div>'+
-                  '<div class="b" style="top:'+c[3]+'%;bottom:'+(100-c[4])+'%;"></div>';
-      ch.appendChild(d);
-    });
-  </script>
+    <!-- Normal support zone: body_bottom → candle_low -->
+    <rect x="60" y="460" width="270" height="60" class="zone-support-fill"/>
+    <line x1="60" y1="460" x2="330" y2="460" class="zone-support-edge"/>
+    <line x1="60" y1="520" x2="330" y2="520" class="zone-support-edge"/>
 
-  <!-- Dashboard -->
-  <div class="dash">
-    <div class="d-t">RP v3.0&ensp;GBPUSD&ensp;H1</div>
-    <div>
-      <span class="cdm">London</span>
-      <span class="cdm">&#x2502;</span>
-      <span class="cg" style="font-weight:bold;">TREND</span> <span class="cdm">28</span>
-      <span class="cdm">&#x2502;</span>
-      <span class="cg">BUY pref</span>
+    <!-- Zone label -->
+    <text x="300" y="495" class="zone-label" fill="rgba(70,190,140,0.85)" text-anchor="end">LV1 | SUPPORT 72 | H1 | Tested:2x | Active</text>
+
+    <!-- Zone bracket -->
+    <line x1="335" y1="460" x2="348" y2="460" class="annotation-line"/>
+    <line x1="335" y1="520" x2="348" y2="520" class="annotation-line"/>
+    <line x1="348" y1="460" x2="348" y2="520" class="annotation-line"/>
+    <text x="354" y="486" class="annotation" font-size="8">1.1005</text>
+    <text x="354" y="516" class="annotation" font-size="8">0.9990</text>
+
+    <!-- Subsequent test candles -->
+    <line x1="210" y1="380" x2="210" y2="475" class="candle-bull-wick"/>
+    <rect x="200" y="395" width="20" height="60" class="candle-bull-body" rx="1"/>
+    <line x1="260" y1="350" x2="260" y2="440" class="candle-bear-wick"/>
+    <rect x="250" y="360" width="20" height="50" class="candle-bear-body" rx="1"/>
+    <line x1="310" y1="370" x2="310" y2="460" class="candle-bull-wick"/>
+    <rect x="300" y="380" width="20" height="55" class="candle-bull-body" rx="1"/>
+
+    <!-- Annotation -->
+    <text x="190" y="555" class="annotation" text-anchor="middle" font-size="11">Normal Zone</text>
+    <text x="190" y="572" class="annotation dash-dim" text-anchor="middle" font-size="9">zone = body_bottom → candle_low</text>
+    <text x="190" y="587" class="annotation dash-dim" text-anchor="middle" font-size="9">no special filter applied</text>
+
+
+    <!-- ──── SECTION B: Wick Filter Zone ──── -->
+    <!-- Pinbar candle with long lower wick -->
+    <line x1="480" y1="210" x2="480" y2="560" class="candle-bull-wick"/>
+    <rect x="470" y="210" width="20" height="55" class="candle-bull-body" rx="1"/>
+
+    <!-- Body annotation -->
+    <line x1="500" y1="210" x2="520" y2="210" class="annotation-line"/>
+    <line x1="500" y1="265" x2="520" y2="265" class="annotation-line"/>
+    <line x1="520" y1="210" x2="520" y2="265" class="annotation-line"/>
+    <text x="528" y="242" class="annotation" font-size="8">body 16%</text>
+
+    <!-- Wick annotation (highlight) -->
+    <line x1="500" y1="265" x2="535" y2="265" class="annotation-line"/>
+    <line x1="500" y1="560" x2="535" y2="560" class="annotation-line"/>
+    <line x1="535" y1="265" x2="535" y2="560" stroke="#e8c84a" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="543" y="395" class="annotation" font-size="9" fill="#e8c84a">wick 84%</text>
+    <text x="543" y="412" class="annotation" font-size="9" fill="#e8c84a">≥ 60% ✓</text>
+
+    <!-- Ghost: original zone (before wick filter) -->
+    <rect x="385" y="265" width="290" height="295" fill="none" stroke="rgba(70,190,140,0.12)" stroke-width="1" stroke-dasharray="3 4"/>
+    <text x="390" y="285" font-size="8" fill="rgba(70,190,140,0.25)" font-family="Consolas">original zone (if no WF)</text>
+
+    <!-- Wick-filtered zone: 30% of range from wick tip -->
+    <!-- range = 350px, 30% = 105px, from 560 up to 455 -->
+    <rect x="385" y="455" width="290" height="105" class="zone-wf-fill"/>
+    <line x1="385" y1="455" x2="675" y2="455" class="zone-wf-edge"/>
+    <line x1="385" y1="560" x2="675" y2="560" class="zone-wf-edge"/>
+
+    <!-- Zone label with WF badge -->
+    <text x="645" y="515" class="zone-label" fill="rgba(70,190,140,0.9)" text-anchor="end">LV1 | SUPPORT 78 | H1 | WF | Fresh</text>
+
+    <!-- Zone bracket -->
+    <line x1="680" y1="455" x2="698" y2="455" class="annotation-line"/>
+    <line x1="680" y1="560" x2="698" y2="560" class="annotation-line"/>
+    <line x1="698" y1="455" x2="698" y2="560" stroke="#60d0a0" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="706" y="500" class="annotation" font-size="9" fill="#60d0a0">30% range</text>
+    <text x="706" y="516" class="annotation" font-size="9" fill="#60d0a0">= trimmed</text>
+
+    <!-- Test candles near WF zone -->
+    <line x1="560" y1="340" x2="560" y2="468" class="candle-bear-wick"/>
+    <rect x="550" y="350" width="20" height="80" class="candle-bear-body" rx="1"/>
+    <line x1="620" y1="300" x2="620" y2="420" class="candle-bull-wick"/>
+    <rect x="610" y="310" width="20" height="70" class="candle-bull-body" rx="1"/>
+
+    <!-- Annotation -->
+    <text x="530" y="590" class="annotation annotation-highlight" text-anchor="middle" font-size="12">Wick Filter Zone</text>
+    <text x="530" y="607" class="annotation" text-anchor="middle" font-size="9">wick ≥ 60% → trim zone to 30% sát wick tip</text>
+    <text x="530" y="622" class="annotation dash-dim" text-anchor="middle" font-size="9">has_wick_filter = true | score +3</text>
+
+
+    <!-- ──── SECTION C: Order Block Zone ──── -->
+    <!-- Context candles before OB -->
+    <line x1="770" y1="350" x2="770" y2="460" class="candle-bull-wick"/>
+    <rect x="760" y="370" width="20" height="60" class="candle-bull-body" rx="1"/>
+
+    <!-- OB candle: last bearish before impulse up -->
+    <line x1="820" y1="280" x2="820" y2="470" class="candle-bear-wick"/>
+    <rect x="810" y="320" width="20" height="100" class="candle-bear-body" rx="1"/>
+
+    <!-- OB candle label -->
+    <text x="842" y="315" class="annotation" font-size="9" fill="#b8a0e8">← OB candle</text>
+    <text x="842" y="330" class="annotation" font-size="8" fill="#7868a0">(last bearish</text>
+    <text x="842" y="342" class="annotation" font-size="8" fill="#7868a0"> before impulse↑)</text>
+
+    <!-- Impulse move up (strong bullish candles after OB) -->
+    <line x1="870" y1="180" x2="870" y2="380" class="candle-bull-wick"/>
+    <rect x="860" y="195" width="20" height="160" class="candle-bull-body" rx="1"/>
+    <line x1="920" y1="120" x2="920" y2="250" class="candle-bull-wick"/>
+    <rect x="910" y="130" width="20" height="100" class="candle-bull-body" rx="1"/>
+
+    <!-- Impulse arrow -->
+    <line x1="750" y1="400" x2="750" y2="160" stroke="#3cba6e" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="744" y="280" class="annotation" font-size="9" fill="#3cba6e" text-anchor="end" writing-mode="tb">impulse ↑</text>
+
+    <!-- OB Zone: body range of OB candle = 320 to 420 -->
+    <rect x="790" y="320" width="230" height="100" class="zone-ob-fill"/>
+    <line x1="790" y1="320" x2="1020" y2="320" class="zone-ob-edge"/>
+    <line x1="790" y1="420" x2="1020" y2="420" class="zone-ob-edge"/>
+
+    <!-- Zone label with OB badge -->
+    <text x="990" y="378" class="zone-label" fill="rgba(150,120,210,0.9)" text-anchor="end">PREMIUM | SUPPORT 88 | H1 | OB | Fresh</text>
+
+    <!-- Zone bracket -->
+    <line x1="1025" y1="320" x2="1038" y2="320" class="annotation-line"/>
+    <line x1="1025" y1="420" x2="1038" y2="420" class="annotation-line"/>
+    <line x1="1038" y1="320" x2="1038" y2="420" stroke="#b8a0e8" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="1020" y="362" class="annotation" font-size="8" fill="#b8a0e8" text-anchor="end">OB body</text>
+    <text x="1020" y="375" class="annotation" font-size="8" fill="#b8a0e8" text-anchor="end">= zone</text>
+
+    <!-- Retest candle coming back -->
+    <line x1="970" y1="290" x2="970" y2="430" class="candle-bear-wick"/>
+    <rect x="960" y="310" width="20" height="80" class="candle-bear-body" rx="1"/>
+    <line x1="1010" y1="340" x2="1010" y2="450" class="candle-bull-wick"/>
+    <rect x="1000" y="360" width="20" height="55" class="candle-bull-body" rx="1"/>
+
+    <!-- Annotation -->
+    <text x="900" y="500" class="annotation annotation-highlight" text-anchor="middle" font-size="12">Order Block Zone</text>
+    <text x="900" y="517" class="annotation" text-anchor="middle" font-size="9">OB body = zone → wick filter SKIPPED</text>
+    <text x="900" y="532" class="annotation dash-dim" text-anchor="middle" font-size="9">is_order_block = true | P29</text>
+
+    <!-- Key difference callout -->
+    <rect x="810" y="442" width="200" height="36" rx="4" fill="rgba(150,120,210,0.1)" stroke="rgba(150,120,210,0.3)"/>
+    <text x="910" y="456" class="annotation" font-size="8" fill="#b8a0e8" text-anchor="middle">OB có wick dài nhưng zone vẫn</text>
+    <text x="910" y="469" class="annotation" font-size="8" fill="#b8a0e8" text-anchor="middle">= body range (không bị trim)</text>
+  </svg>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:rgba(70,190,140,0.5); border:1px solid rgba(70,190,140,0.7);"></div>
+      <span>Support</span>
     </div>
-    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
-    <div class="d-dim">ATR 12.4p&ensp;Sprd <span style="color:#bbb;">1.2p</span>&ensp;News <span class="cg">clear</span></div>
-    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
-    <div class="d-rp cp">&#x25B2; C 1.09580 124 7p</div>
-    <div class="d-rp cr">&#x25BC; R 1.10320 92 38p</div>
-    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
-    <div class="d-dim">12z 3c 1rr &#x2502; Hit 72%</div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:rgba(210,100,100,0.5); border:1px solid rgba(210,100,100,0.7);"></div>
+      <span>Resistance</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:rgba(70,190,140,0.5); border:2px dashed rgba(70,190,140,0.85);"></div>
+      <span>Wick Filtered</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:rgba(150,120,210,0.4); border:1px solid rgba(150,120,210,0.7);"></div>
+      <span>Order Block</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:rgba(255,210,80,0.5); border:1px solid rgba(255,210,80,0.8);"></div>
+      <span>Premium</span>
+    </div>
   </div>
 
+  <!-- Title -->
+  <div class="title-bar">
+    <h1>RP System — Wick Filter & Order Block Zone Demo</h1>
+    <p>So sánh 3 loại zone: Normal | Wick Filter (P24a) | Order Block (P29)</p>
+  </div>
 </div>
 
-<!-- Legend -->
-<div class="leg">
-  <div class="li"><div class="sw" style="background:rgba(255,210,80,0.35);border:3px solid rgba(255,210,80,0.85);"></div>Premium</div>
-  <div class="li"><div class="sw" style="background:rgba(210,100,100,0.30);border:2px solid rgba(210,100,100,0.75);"></div>Resistance</div>
-  <div class="li"><div class="sw" style="background:rgba(70,190,140,0.30);border:2px solid rgba(70,190,140,0.75);"></div>Support</div>
-  <div class="li"><div class="sw" style="background:rgba(150,120,210,0.24);border:2px solid rgba(150,120,210,0.65);"></div>Confluence</div>
-  <div class="li"><div class="sw" style="background:rgba(170,110,170,0.20);border:2px dashed rgba(170,110,170,0.55);"></div>Role Reversal</div>
-  <div class="li"><div class="sw" style="opacity:0.5;background:rgba(70,190,140,0.22);border:1px solid rgba(70,190,140,0.5);"></div>Faded</div>
+<!-- ════════════════════ DASHBOARD ════════════════════ -->
+<div class="dashboard">
+  <div class="dash-header">RP v3.0 &nbsp; EURUSD &nbsp; H1</div>
+
+  <div class="dash-row">
+    <span class="dash-dim">Session</span>
+    <span class="dash-green">London &nbsp;│&nbsp; STRONG_TREND</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">Bias</span>
+    <span class="dash-red">SELL preferred</span>
+  </div>
+
+  <div class="dash-sep"></div>
+
+  <div class="dash-row">
+    <span class="dash-dim">ATR</span>
+    <span class="dash-gray">12.4 pips</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">Spread</span>
+    <span class="dash-green">0.8 pips</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">News</span>
+    <span class="dash-gray">Clear</span>
+  </div>
+
+  <div class="dash-sep"></div>
+  <div class="dash-section-title">Nearest Zones</div>
+
+  <!-- Zone Card 1: OB Support -->
+  <div class="zone-card" style="border-left:3px solid rgba(150,120,210,0.7);">
+    <div class="zone-card-header">
+      <span>
+        <span class="dash-teal">▲ SUPPORT</span>
+        <span class="dash-badge badge-ob">OB</span>
+        <span class="dash-badge badge-fresh">FRESH</span>
+      </span>
+      <span class="dash-gold" style="font-weight:bold;">88</span>
+    </div>
+    <div class="zone-card-row">
+      <span>1.1020 — 1.0995</span>
+      <span class="dash-gold">PREMIUM</span>
+    </div>
+    <div class="zone-card-row">
+      <span>Distance: 8 pips ↓</span>
+      <span class="dash-dim">OB bar: #3</span>
+    </div>
+  </div>
+
+  <!-- Zone Card 2: Wick Filter Support -->
+  <div class="zone-card" style="border-left:3px solid rgba(70,190,140,0.7);">
+    <div class="zone-card-header">
+      <span>
+        <span class="dash-teal">▲ SUPPORT</span>
+        <span class="dash-badge badge-wf">WF</span>
+        <span class="dash-badge badge-fresh">FRESH</span>
+      </span>
+      <span class="dash-gray" style="font-weight:bold;">78</span>
+    </div>
+    <div class="zone-card-row">
+      <span>1.0968 — 1.0953</span>
+      <span class="dash-teal">LV1</span>
+    </div>
+    <div class="zone-card-row">
+      <span>Distance: 32 pips ↓</span>
+      <span class="dash-dim">Trimmed 30%</span>
+    </div>
+  </div>
+
+  <!-- Zone Card 3: Normal Support -->
+  <div class="zone-card" style="border-left:3px solid rgba(70,190,140,0.5);">
+    <div class="zone-card-header">
+      <span>
+        <span class="dash-teal">▲ SUPPORT</span>
+        <span class="dash-badge badge-tested">2x</span>
+      </span>
+      <span class="dash-gray" style="font-weight:bold;">72</span>
+    </div>
+    <div class="zone-card-row">
+      <span>1.1005 — 1.0990</span>
+      <span class="dash-teal">LV1</span>
+    </div>
+    <div class="zone-card-row">
+      <span>Distance: 5 pips ↓</span>
+      <span class="dash-dim">Tested: 2x body</span>
+    </div>
+  </div>
+
+  <div class="dash-sep"></div>
+  <div class="dash-section-title">Zone Type Comparison</div>
+
+  <!-- Comparison table -->
+  <table style="width:100%; font-size:10px; border-collapse:collapse; margin-top:4px;">
+    <thead>
+      <tr style="color:#6878a0; border-bottom:1px solid #283042;">
+        <th style="text-align:left; padding:4px 2px;">Feature</th>
+        <th style="text-align:center; padding:4px 2px;">Normal</th>
+        <th style="text-align:center; padding:4px 2px; color:#60d0a0;">WF</th>
+        <th style="text-align:center; padding:4px 2px; color:#b8a0e8;">OB</th>
+      </tr>
+    </thead>
+    <tbody style="color:#8898b0;">
+      <tr style="border-bottom:1px solid #1a2030;">
+        <td style="padding:3px 2px;">Zone source</td>
+        <td style="text-align:center;">Swing bar</td>
+        <td style="text-align:center; color:#60d0a0;">Swing bar</td>
+        <td style="text-align:center; color:#b8a0e8;">OB candle</td>
+      </tr>
+      <tr style="border-bottom:1px solid #1a2030;">
+        <td style="padding:3px 2px;">Zone range</td>
+        <td style="text-align:center;">Body → wick</td>
+        <td style="text-align:center; color:#60d0a0;">30% wick tip</td>
+        <td style="text-align:center; color:#b8a0e8;">OB body</td>
+      </tr>
+      <tr style="border-bottom:1px solid #1a2030;">
+        <td style="padding:3px 2px;">Wick filter</td>
+        <td style="text-align:center;">N/A</td>
+        <td style="text-align:center; color:#60d0a0;">Applied ✓</td>
+        <td style="text-align:center; color:#b8a0e8;">Skipped ✗</td>
+      </tr>
+      <tr style="border-bottom:1px solid #1a2030;">
+        <td style="padding:3px 2px;">Score bonus</td>
+        <td style="text-align:center;">—</td>
+        <td style="text-align:center; color:#60d0a0;">+3</td>
+        <td style="text-align:center; color:#b8a0e8;">—</td>
+      </tr>
+      <tr style="border-bottom:1px solid #1a2030;">
+        <td style="padding:3px 2px;">Edge style</td>
+        <td style="text-align:center;">Solid</td>
+        <td style="text-align:center; color:#60d0a0;">Dashed</td>
+        <td style="text-align:center; color:#b8a0e8;">Solid</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 2px;">Color</td>
+        <td style="text-align:center;">S/R color</td>
+        <td style="text-align:center; color:#60d0a0;">S/R color</td>
+        <td style="text-align:center; color:#b8a0e8;">Purple</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="dash-sep"></div>
+  <div class="dash-section-title">Logic Flow (Detection)</div>
+
+  <div style="font-size:10px; color:#6878a0; line-height:1.8; padding:4px 0;">
+    <div><span style="color:#b8a0e8;">1.</span> FindOrderBlockBar(swing, type, 5)</div>
+    <div style="padding-left:14px; color:#556070;">↳ OB found → zone = <span style="color:#b8a0e8;">OB body</span></div>
+    <div style="padding-left:14px; color:#556070;">↳ Not found → zone = swing candle</div>
+    <div style="margin-top:4px;"><span style="color:#60d0a0;">2.</span> Wick Ratio Filter (P24a)</div>
+    <div style="padding-left:14px; color:#556070;">↳ is_order_block? → <span style="color:#d26464;">SKIP</span></div>
+    <div style="padding-left:14px; color:#556070;">↳ wick ≥ 60%? → <span style="color:#60d0a0;">trim 30%</span></div>
+    <div style="padding-left:14px; color:#556070;">↳ else → keep original zone</div>
+    <div style="margin-top:4px;"><span style="color:#ffd250;">3.</span> ATR Width Cap (P24b)</div>
+    <div style="padding-left:14px; color:#556070;">↳ clamp zone ≤ ATR × multiplier</div>
+  </div>
+
+  <div class="dash-sep"></div>
+
+  <div class="dash-row">
+    <span class="dash-dim">Active zones</span>
+    <span class="dash-gray">8</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">Confluence</span>
+    <span class="dash-purple">2</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">Role reversals</span>
+    <span class="dash-gray">1</span>
+  </div>
+  <div class="dash-row">
+    <span class="dash-dim">Hit rate</span>
+    <span class="dash-green">68%</span>
+  </div>
 </div>
 
+</div>
 </body>
 </html>

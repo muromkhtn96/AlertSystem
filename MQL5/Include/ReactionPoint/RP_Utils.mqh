@@ -182,6 +182,10 @@ int      g_fibo_leg_count     = 0;
 SHTFTrend g_htf_trends[3];    // [0]=current TF, [1]=HTF_1, [2]=HTF_2
 bool      g_use_trend_alignment = true;
 
+// RP ID → array index map for O(1) lookup (replaces O(N) linear scan)
+#define MAX_RP_ID_MAP 500
+int    g_rp_id_to_index[];   // ArrayResize(MAX_RP_ID_MAP) in OnInit, init to -1
+
 // Dirty flags
 bool   g_rp_dirty[];
 int    g_last_calc_bar[];
@@ -842,6 +846,72 @@ void ApplyVolatilityScaling()
          " | MinDist=", g_min_rp_distance_pips,
          " | BreakConf=", g_breakout_confirm_pips,
          " | MergePips=", g_confluence_merge_pips);
+}
+
+//+------------------------------------------------------------------+
+//| InitRPIDMap — call in OnInit after array allocation               |
+//+------------------------------------------------------------------+
+void InitRPIDMap()
+{
+   ArrayResize(g_rp_id_to_index, MAX_RP_ID_MAP);
+   ArrayInitialize(g_rp_id_to_index, -1);
+}
+
+//+------------------------------------------------------------------+
+//| RebuildRPIDMap — full rebuild, call after bulk changes             |
+//+------------------------------------------------------------------+
+void RebuildRPIDMap()
+{
+   ArrayInitialize(g_rp_id_to_index, -1);
+   for(int i = 0; i < g_rp_count; i++)
+   {
+      int id = g_rp_array[i].id;
+      if(id >= 0 && id < MAX_RP_ID_MAP)
+         g_rp_id_to_index[id] = i;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| SetRPIDMap — update single entry                                   |
+//+------------------------------------------------------------------+
+void SetRPIDMap(int rp_id, int array_index)
+{
+   if(rp_id >= 0 && rp_id < MAX_RP_ID_MAP)
+      g_rp_id_to_index[rp_id] = array_index;
+}
+
+//+------------------------------------------------------------------+
+//| ClearRPIDMap — remove single entry                                 |
+//+------------------------------------------------------------------+
+void ClearRPIDMap(int rp_id)
+{
+   if(rp_id >= 0 && rp_id < MAX_RP_ID_MAP)
+      g_rp_id_to_index[rp_id] = -1;
+}
+
+//+------------------------------------------------------------------+
+//| FindRPIndexByID — O(1) lookup with fallback to O(N) scan          |
+//+------------------------------------------------------------------+
+int FindRPIndexByID(int rp_id)
+{
+   //--- Fast path: direct map lookup
+   if(rp_id >= 0 && rp_id < MAX_RP_ID_MAP)
+   {
+      int idx = g_rp_id_to_index[rp_id];
+      if(idx >= 0 && idx < g_rp_count && g_rp_array[idx].id == rp_id)
+         return idx;
+   }
+
+   //--- Fallback: linear scan (handles ID >= MAX_RP_ID_MAP or stale map)
+   for(int r = 0; r < g_rp_count; r++)
+   {
+      if(g_rp_array[r].id == rp_id)
+      {
+         SetRPIDMap(rp_id, r);  // Update map for next time
+         return r;
+      }
+   }
+   return -1;
 }
 
 #endif // RP_UTILS_MQH

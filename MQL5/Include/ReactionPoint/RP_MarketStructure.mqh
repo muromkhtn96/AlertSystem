@@ -21,8 +21,8 @@ void UpdateMarketStructure()
    if(g_last_bos_bar > 0)   g_last_bos_bar++;
    if(g_last_choch_bar > 0) g_last_choch_bar++;
 
-   //--- CHoCH expires after 10 bars
-   if(g_choch_detected && g_last_choch_bar > 10)
+   //--- CHoCH expires after 15 bars (gradual fade from bar 6-15)
+   if(g_choch_detected && g_last_choch_bar > 15)
       g_choch_detected = false;
 
    int available = Bars(_Symbol, PERIOD_CURRENT);
@@ -271,18 +271,31 @@ double GetStructureScoreAdj(int rp_index)
    if(rp.rp_type == RP_RESISTANCE && g_current_structure == STRUCTURE_BEARISH)
       return 15.0;
 
-   // Counter-trend without CHoCH → -20
+   // Counter-trend: CHoCH gradual decay instead of cliff
+   // CHoCH bar 1-5: +10 (full reversal play), bar 6-15: linear fade to -20
+   // This prevents the abrupt 30-point jump at bar 11
    if(rp.rp_type == RP_SUPPORT && g_current_structure == STRUCTURE_BEARISH)
    {
-      if(g_choch_detected && g_last_choch_bar <= 10)
-         return 10.0;   // CHoCH just occurred → reversal play valid
+      if(g_choch_detected && g_last_choch_bar <= 5)
+         return 10.0;   // CHoCH fresh → reversal play valid
+      if(g_choch_detected && g_last_choch_bar <= 15)
+      {
+         // Linear fade: bar 6 = +10, bar 15 = -20
+         double fade = 10.0 - (double)(g_last_choch_bar - 5) / 10.0 * 30.0;
+         return fade;
+      }
       return -20.0;
    }
 
    if(rp.rp_type == RP_RESISTANCE && g_current_structure == STRUCTURE_BULLISH)
    {
-      if(g_choch_detected && g_last_choch_bar <= 10)
+      if(g_choch_detected && g_last_choch_bar <= 5)
          return 10.0;
+      if(g_choch_detected && g_last_choch_bar <= 15)
+      {
+         double fade = 10.0 - (double)(g_last_choch_bar - 5) / 10.0 * 30.0;
+         return fade;
+      }
       return -20.0;
    }
 
