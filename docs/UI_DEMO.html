@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RP v3.0 — Zone UI</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0e1117; color:#c8cdd8; font-family:'Consolas','Courier New',monospace; }
+
+  .chart {
+    position:relative; width:1100px; height:580px;
+    margin:30px auto; background:#131722;
+    border:1px solid #1e222d; border-radius:4px; overflow:hidden;
+  }
+
+  .gl { position:absolute; left:0; right:0; height:1px; background:#1a1e2a; }
+  .pl { position:absolute; right:6px; font-size:9px; color:#3a3f50; transform:translateY(-50%); }
+
+  .c { position:absolute; width:7px; }
+  .c .w { position:absolute; width:1px; left:50%; transform:translateX(-50%); }
+  .c .b { position:absolute; left:1px; right:1px; border-radius:1px; min-height:1px; }
+  .c.bu .b { background:#26a69a; } .c.bu .w { background:#26a69a; }
+  .c.be .b { background:#ef5350; } .c.be .w { background:#ef5350; }
+
+  /* ═══ ZONES: visible fill + crisp edge lines ═══ */
+  .z { position:absolute; }
+  .z .f { position:absolute; inset:0; }
+  .z .et, .z .eb { position:absolute; left:0; right:0; }
+  .z .et { top:0; } .z .eb { bottom:0; }
+
+  /* Support — teal */
+  .z.s .f { background:rgba(70,190,140,0.22); }
+  .z.s.l1 .f { background:rgba(70,190,140,0.30); }
+  .z.s .et,.z.s .eb { height:1px; background:rgba(70,190,140,0.60); }
+  .z.s.l1 .et,.z.s.l1 .eb { height:2px; background:rgba(70,190,140,0.80); }
+
+  /* Resistance — coral */
+  .z.r .f { background:rgba(210,100,100,0.22); }
+  .z.r.l1 .f { background:rgba(210,100,100,0.30); }
+  .z.r .et,.z.r .eb { height:1px; background:rgba(210,100,100,0.60); }
+  .z.r.l1 .et,.z.r.l1 .eb { height:2px; background:rgba(210,100,100,0.80); }
+
+  /* Premium — gold */
+  .z.pm .f { background:rgba(255,210,80,0.28); }
+  .z.pm .et,.z.pm .eb { height:3px; background:rgba(255,210,80,0.85); }
+
+  /* Confluence glow */
+  .z.cf::before { content:''; position:absolute; inset:-4px; background:rgba(150,120,210,0.07); z-index:-1; }
+  .z.cf .f { background:rgba(150,120,210,0.24); }
+  .z.cf .et,.z.cf .eb { height:2px; background:rgba(150,120,210,0.70); }
+
+  /* Role Reversal — muted magenta dashed */
+  .z.rr .f { background:rgba(170,110,170,0.20); }
+  .z.rr .et,.z.rr .eb { height:0; border-top:2px dashed rgba(170,110,170,0.60); }
+
+  .z.fade { opacity:0.50; }
+
+  /* Labels — original readable format, right-aligned inside zone */
+  .zl {
+    position:absolute; right:24%; font-size:10px; white-space:nowrap;
+    text-align:right; opacity:0.90;
+  }
+
+  .cs { color:#46be8c; } .cr { color:#d26464; } .cp { color:#ffd250; }
+  .ccf { color:#9678d2; } .crr { color:#aa6eaa; }
+
+  /* Dashboard */
+  .dash {
+    position:absolute; top:8px; right:8px; width:250px;
+    background:rgba(16,20,28,0.92); border:1px solid #28303e;
+    border-radius:3px; padding:6px 8px; font-size:10px;
+    line-height:1.65; backdrop-filter:blur(4px);
+  }
+  .d-t { color:#a0a8c0; font-size:10px; }
+  .d-sep { color:#252d3a; font-size:7px; letter-spacing:0.5px; line-height:1.0; }
+  .d-dim { color:#5a6580; font-size:9px; }
+  .d-rp { font-size:10px; }
+  .cg { color:#50dc78; } .cdm { color:#5a6580; }
+
+  .leg { width:1100px; margin:0 auto 30px; display:flex; gap:20px; flex-wrap:wrap; font-size:10px; color:#666; justify-content:center; }
+  .li { display:flex; align-items:center; gap:5px; }
+  .sw { width:28px; height:10px; border-radius:1px; }
+
+  h2 { text-align:center; color:#8890a4; margin:30px 0 4px; font-size:14px; font-weight:400; }
+  .sub { text-align:center; color:#4a5060; font-size:11px; margin-bottom:15px; }
+</style>
+</head>
+<body>
+
+<h2>REACTION POINT v3.0 &mdash; P28 UI Redesign</h2>
+<p class="sub">Visible zone fill + Edge lines + Original readable labels</p>
+
+<div class="chart">
+
+  <div class="gl" style="top:12%;"></div><div class="pl" style="top:12%;">1.10500</div>
+  <div class="gl" style="top:28%;"></div><div class="pl" style="top:28%;">1.10200</div>
+  <div class="gl" style="top:44%;"></div><div class="pl" style="top:44%;">1.09900</div>
+  <div class="gl" style="top:60%;"></div><div class="pl" style="top:60%;">1.09600</div>
+  <div class="gl" style="top:76%;"></div><div class="pl" style="top:76%;">1.09300</div>
+  <div class="gl" style="top:90%;"></div><div class="pl" style="top:90%;">1.09050</div>
+
+  <!-- ═══ ZONES with visible fill + edge lines + readable labels ═══ -->
+
+  <!-- PREMIUM Confluence (gold) -->
+  <div class="z pm cf" style="left:4%;right:24%;top:62%;height:5%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl cp" style="top:63.5%;">PREMIUM | CONFLUENCE 124 | H1 | Tested:0x | Fresh</div>
+
+  <!-- Resistance LV1 -->
+  <div class="z r l1" style="left:12%;right:24%;top:18%;height:4%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl cr" style="top:19%;">LV1 | RESISTANCE 92 | H1 | Tested:2x | Active</div>
+
+  <!-- Support LV1 -->
+  <div class="z s l1" style="left:28%;right:24%;top:73%;height:4%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl cs" style="top:74%;">LV1 | SUPPORT 88 | H4 | Tested:1x | Active</div>
+
+  <!-- Role Reversal -->
+  <div class="z rr" style="left:8%;right:24%;top:40%;height:3.2%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl crr" style="top:40.5%;">PREMIUM | CONFLUENCE 150 | H1 | Tested:0x | RoleRev</div>
+
+  <!-- Support LV2 (faded) -->
+  <div class="z s fade" style="left:42%;right:24%;top:83%;height:3%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl cs fade" style="top:83.5%;">LV2 | SUPPORT 62 | M30 | Tested:1x | Decay:-20</div>
+
+  <!-- Resistance LV2 (faded) -->
+  <div class="z r fade" style="left:35%;right:24%;top:9%;height:2.8%;">
+    <div class="f"></div><div class="et"></div><div class="eb"></div>
+  </div>
+  <div class="zl cr fade" style="top:9.5%;">LV2 | RESISTANCE 55 | H1 | Tested:0x | Fresh</div>
+
+  <!-- Candles -->
+  <script>
+    const ch=document.querySelector('.chart');
+    [
+      [5,1,30,34,40,44],[7,0,32,35,42,46],[9,1,28,32,37,42],[11,1,26,29,35,40],
+      [13,0,27,30,38,42],[15,1,32,36,40,45],[17,0,29,32,40,44],[19,1,24,28,32,38],
+      [21,1,22,25,30,36],[23,0,24,27,35,40],[25,1,27,30,34,39],[27,0,26,29,37,42],
+      [29,1,30,34,38,43],[31,1,28,31,35,40],[33,0,30,33,40,45],[35,1,32,36,40,44],
+      [37,0,34,37,44,48],[39,1,36,40,44,49],[41,0,32,35,42,46],[43,1,30,33,38,43],
+      [45,1,27,30,35,40],[47,0,29,32,39,44],[49,1,32,36,40,45],[51,1,30,33,37,42],
+      [53,0,32,35,42,46],[55,1,34,38,42,47],[57,0,36,39,46,50],[59,1,38,42,46,51],
+      [61,0,34,37,44,48],[63,1,32,35,40,45],[65,1,30,33,37,42],[67,0,32,35,42,46],
+      [69,1,28,31,36,41],[71,0,30,33,40,44],
+    ].forEach(c=>{
+      const d=document.createElement('div');
+      d.className='c '+(c[1]?'bu':'be');
+      d.style.cssText='left:'+c[0]+'%;';
+      d.innerHTML='<div class="w" style="top:'+c[2]+'%;bottom:'+(100-c[5])+'%;"></div>'+
+                  '<div class="b" style="top:'+c[3]+'%;bottom:'+(100-c[4])+'%;"></div>';
+      ch.appendChild(d);
+    });
+  </script>
+
+  <!-- Dashboard -->
+  <div class="dash">
+    <div class="d-t">RP v3.0&ensp;GBPUSD&ensp;H1</div>
+    <div>
+      <span class="cdm">London</span>
+      <span class="cdm">&#x2502;</span>
+      <span class="cg" style="font-weight:bold;">TREND</span> <span class="cdm">28</span>
+      <span class="cdm">&#x2502;</span>
+      <span class="cg">BUY pref</span>
+    </div>
+    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
+    <div class="d-dim">ATR 12.4p&ensp;Sprd <span style="color:#bbb;">1.2p</span>&ensp;News <span class="cg">clear</span></div>
+    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
+    <div class="d-rp cp">&#x25B2; C 1.09580 124 7p</div>
+    <div class="d-rp cr">&#x25BC; R 1.10320 92 38p</div>
+    <div class="d-sep">&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</div>
+    <div class="d-dim">12z 3c 1rr &#x2502; Hit 72%</div>
+  </div>
+
+</div>
+
+<!-- Legend -->
+<div class="leg">
+  <div class="li"><div class="sw" style="background:rgba(255,210,80,0.35);border:3px solid rgba(255,210,80,0.85);"></div>Premium</div>
+  <div class="li"><div class="sw" style="background:rgba(210,100,100,0.30);border:2px solid rgba(210,100,100,0.75);"></div>Resistance</div>
+  <div class="li"><div class="sw" style="background:rgba(70,190,140,0.30);border:2px solid rgba(70,190,140,0.75);"></div>Support</div>
+  <div class="li"><div class="sw" style="background:rgba(150,120,210,0.24);border:2px solid rgba(150,120,210,0.65);"></div>Confluence</div>
+  <div class="li"><div class="sw" style="background:rgba(170,110,170,0.20);border:2px dashed rgba(170,110,170,0.55);"></div>Role Reversal</div>
+  <div class="li"><div class="sw" style="opacity:0.5;background:rgba(70,190,140,0.22);border:1px solid rgba(70,190,140,0.5);"></div>Faded</div>
+</div>
+
+</body>
+</html>

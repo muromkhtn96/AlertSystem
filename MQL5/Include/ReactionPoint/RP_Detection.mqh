@@ -86,21 +86,6 @@ ENUM_CANDLE_PATTERN DetectCandlePattern(int bar_idx)
 }
 
 //+------------------------------------------------------------------+
-//| Get candle pattern score                                          |
-//+------------------------------------------------------------------+
-double GetCandlePatternScore(ENUM_CANDLE_PATTERN pattern)
-{
-   switch(pattern)
-   {
-      case PATTERN_PINBAR:      return 12.0;
-      case PATTERN_ENGULFING:   return 10.0;
-      case PATTERN_OUTSIDE_BAR: return 8.0;
-      case PATTERN_LARGE_WICK:  return 6.0;
-      default:                  return 0.0;
-   }
-}
-
-//+------------------------------------------------------------------+
 //| Check momentum confirmation for swing                             |
 //| Returns true + reaction_pips if price moved enough after swing    |
 //+------------------------------------------------------------------+

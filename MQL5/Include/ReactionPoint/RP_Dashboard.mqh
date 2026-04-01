@@ -10,14 +10,16 @@
 #include "RP_Utils.mqh"
 
 //+------------------------------------------------------------------+
-//| Dashboard layout constants                                        |
+//| P28: Dashboard layout — compact, modern                            |
 //+------------------------------------------------------------------+
-#define DASH_WIDTH         380
-#define DASH_ROW_HEIGHT    18
-#define DASH_PADDING       10
-#define DASH_BG_COLOR      C'20,25,32'
-#define DASH_BORDER_COLOR  C'60,65,75'
-#define DASH_MAX_ROWS      20
+#define DASH_WIDTH         340
+#define DASH_ROW_HEIGHT    17
+#define DASH_PADDING       8
+#define DASH_BG_COLOR      C'16,20,28'
+#define DASH_BORDER_COLOR  C'40,48,62'
+#define DASH_ACCENT_COLOR  C'55,65,85'
+#define DASH_DIM_COLOR     C'90,100,120'
+#define DASH_MAX_ROWS      18
 
 //+------------------------------------------------------------------+
 //| Dashboard row names                                                |
@@ -126,87 +128,86 @@ void CreateDashboard()
 //+------------------------------------------------------------------+
 //| UpdateDashboard — called once per new bar                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| P28: Thin separator line using Unicode                             |
+//+------------------------------------------------------------------+
+string DashSep(int char_count)
+{
+   string s = "";
+   string thin_line = ShortToString(0x2500); // ─ (box drawing horizontal)
+   for(int i = 0; i < char_count; i++)
+      s += thin_line;
+   return s;
+}
+
+//+------------------------------------------------------------------+
+//| P28: UpdateDashboard — compact, modern, clean                      |
+//+------------------------------------------------------------------+
 void UpdateDashboard()
 {
    if(!g_show_dashboard || !g_dash_created) return;
 
-   int x_base = DASH_PADDING + 8;
-   int y_base = DASH_PADDING + 8;
+   int x = DASH_PADDING + 6;
+   int y = DASH_PADDING + 6;
    int row = 0;
    int fs = g_dashboard_font_size;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
-   //--- Detect current TF preset name
-   string preset_name;
-   ENUM_TIMEFRAMES tf = Period();
-   if(tf <= PERIOD_M30)      preset_name = "M30";
-   else if(tf <= PERIOD_H1)  preset_name = "H1";
-   else if(tf <= PERIOD_H4)  preset_name = "H4";
-   else                      preset_name = "D1";
-
-   //=== ROW 0: Title ===
-   DashLabel(OBJECT_PREFIX + "DASH_R0", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "REACTION POINT v3.0           Preset: " + preset_name,
-             clrWhite, fs);
+   //=== HEADER: Title + TF ===
+   DashLabel(OBJECT_PREFIX + "DASH_R0", x, y + row * DASH_ROW_HEIGHT,
+             "RP v3.0  " + _Symbol + "  " + TFToString(Period()),
+             C'180,190,210', fs);
    row++;
 
-   //=== ROW 1: Symbol | TF | Session ===
-   DashLabel(OBJECT_PREFIX + "DASH_R1", x_base, y_base + row * DASH_ROW_HEIGHT,
-             _Symbol + "  |  " + TFToString(Period()) + "  |  " + SessionToString(g_current_session),
-             clrWhite, fs);
+   //=== SESSION + REGIME (single row) ===
+   color regime_clr = (g_current_regime == REGIME_CHOPPY) ? C'220,80,80' :
+                      (g_current_regime == REGIME_STRONG_TREND) ? C'80,220,120' : C'160,170,190';
+   string regime_short;
+   switch(g_current_regime)
+   {
+      case REGIME_STRONG_TREND: regime_short = "TREND"; break;
+      case REGIME_WEAK_TREND:   regime_short = "WEAK";  break;
+      case REGIME_RANGING:      regime_short = "RANGE"; break;
+      case REGIME_CHOPPY:       regime_short = "CHOP";  break;
+      default:                  regime_short = "---";   break;
+   }
+
+   DashLabel(OBJECT_PREFIX + "DASH_R1", x, y + row * DASH_ROW_HEIGHT,
+             SessionToString(g_current_session) + "  " +
+             ShortToString(0x2502) + "  " +    // │ vertical separator
+             regime_short + " " + DoubleToString(g_current_adx, 0) + "  " +
+             ShortToString(0x2502) + "  " +
+             GetBiasString(),
+             regime_clr, fs);
    row++;
 
-   //=== ROW 2: Separator ===
-   DashLabel(OBJECT_PREFIX + "DASH_SEP1", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "--------------------------------------------",
-             DASH_BORDER_COLOR, fs - 1);
+   //=== THIN SEPARATOR ===
+   DashLabel(OBJECT_PREFIX + "DASH_SEP1", x, y + row * DASH_ROW_HEIGHT,
+             DashSep(44), DASH_ACCENT_COLOR, fs - 2);
    row++;
 
-   //=== ROW 3: Regime ===
-   color regime_color = (g_current_regime == REGIME_CHOPPY) ? clrTomato :
-                        (g_current_regime == REGIME_STRONG_TREND) ? clrLime : clrWhite;
-   string regime_text = "REGIME   " + RegimeToString(g_current_regime) +
-                        "    ADX: " + DoubleToString(g_current_adx, 1);
-   if(g_current_regime == REGIME_CHOPPY)
-      regime_text += "  AVOID TRADING";
-
-   DashLabel(OBJECT_PREFIX + "DASH_R3", x_base, y_base + row * DASH_ROW_HEIGHT,
-             regime_text, regime_color, fs);
-   row++;
-
-   //=== ROW 4: Bias ===
-   DashLabel(OBJECT_PREFIX + "DASH_R4", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "BIAS     " + GetBiasString(),
-             GetBiasColor(), fs);
-   row++;
-
-   //=== ROW 5: ATR | Spread | News ===
+   //=== METRICS ROW: ATR  Spread  News ===
    double atr_pips = PriceToPips(g_cached_atr14);
-   color spread_color = GetSpreadColor(g_current_spread_pips, g_average_spread_pips);
-
-   DashLabel(OBJECT_PREFIX + "DASH_R5", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "ATR: " + DoubleToString(atr_pips, 1) + "p  |  " +
-             "Spread: " + DoubleToString(g_current_spread_pips, 1) + "p  |  " +
-             "NEWS: " + g_news_status_text,
-             clrWhite, fs);
+   string metrics = "ATR " + DoubleToString(atr_pips, 1) + "p" +
+                    "   Sprd " + DoubleToString(g_current_spread_pips, 1) + "p" +
+                    "   News " + g_news_status_text;
+   DashLabel(OBJECT_PREFIX + "DASH_R3", x, y + row * DASH_ROW_HEIGHT,
+             metrics, DASH_DIM_COLOR, fs - 1);
    row++;
 
-   //--- Spread sub-color and News sub-color (update inline colors via separate labels)
-   DashLabel(OBJECT_PREFIX + "DASH_R5_SPREAD", x_base + 130, y_base + (row - 1) * DASH_ROW_HEIGHT,
-             DoubleToString(g_current_spread_pips, 1) + "p",
-             spread_color, fs);
+   //--- Colored overlay for spread + news status
+   color spread_clr = GetSpreadColor(g_current_spread_pips, g_average_spread_pips);
+   DashLabel(OBJECT_PREFIX + "DASH_R3S", x + 100, y + (row-1) * DASH_ROW_HEIGHT,
+             DoubleToString(g_current_spread_pips, 1) + "p", spread_clr, fs - 1);
+   DashLabel(OBJECT_PREFIX + "DASH_R3N", x + 240, y + (row-1) * DASH_ROW_HEIGHT,
+             g_news_status_text, g_news_status_color, fs - 1);
 
-   DashLabel(OBJECT_PREFIX + "DASH_R5_NEWS", x_base + 280, y_base + (row - 1) * DASH_ROW_HEIGHT,
-             g_news_status_text,
-             g_news_status_color, fs);
-
-   //=== ROW 6: Separator ===
-   DashLabel(OBJECT_PREFIX + "DASH_SEP2", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "--------------------------------------------",
-             DASH_BORDER_COLOR, fs - 1);
+   //=== THIN SEPARATOR ===
+   DashLabel(OBJECT_PREFIX + "DASH_SEP2", x, y + row * DASH_ROW_HEIGHT,
+             DashSep(44), DASH_ACCENT_COLOR, fs - 2);
    row++;
 
-   //=== ROW 7-8: Top 2 nearest RPs (selection sort, no state mutation) ===
+   //=== NEAREST ZONES (top 2) ===
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    int shown = 0;
    int shown_indices[2];
@@ -222,156 +223,101 @@ void UpdateDashboard()
       {
          if(!g_rp_array[i].is_active) continue;
          if(g_rp_array[i].final_score < g_min_score_to_show) continue;
-
-         //--- Skip already-shown indices
          bool already = false;
          for(int s = 0; s < shown; s++)
             if(shown_indices[s] == i) { already = true; break; }
          if(already) continue;
 
          double dist = MathAbs(bid - g_rp_array[i].price);
-         if(dist < best_dist)
-         {
-            best_dist = dist;
-            best_idx = i;
-         }
+         if(dist < best_dist) { best_dist = dist; best_idx = i; }
       }
 
       if(best_idx >= 0)
       {
          shown_indices[shown] = best_idx;
          SReactionPoint rp = g_rp_array[best_idx];
-         string type_str = (rp.rp_type == RP_SUPPORT) ? "SUP" : "RES";
-         double dist_pips = PriceToPips(MathAbs(bid - rp.price));
-         string conf_str = rp.is_confluence ? "Conf" : "";
-         string status_str = rp.is_fresh ? "Fresh" : "";
-         if(rp.is_role_reversed) status_str = "RoleRev";
+         string t = (rp.rp_type == RP_SUPPORT) ? "S" : "R";
+         if(rp.is_confluence) t = "C";
+         double dp = PriceToPips(MathAbs(bid - rp.price));
 
-         string rp_line = type_str + "  " +
-                          DoubleToString(rp.price, digits) + "  Score:" +
-                          DoubleToString(rp.final_score, 0) + "   " +
-                          DoubleToString(dist_pips, 0) + "p  " +
-                          conf_str + "  " + status_str;
+         // Arrow indicator: ▲ for support below, ▼ for resistance above
+         string arrow = (rp.rp_type == RP_SUPPORT) ?
+                        ShortToString(0x25B2) : ShortToString(0x25BC);
+
+         string rp_line = arrow + " " + t + "  " +
+                          DoubleToString(rp.price, digits) + "  " +
+                          DoubleToString(rp.final_score, 0) + "  " +
+                          DoubleToString(dp, 0) + "p";
+
+         if(rp.is_fresh) rp_line += "  Fresh";
+         else if(rp.is_role_reversed) rp_line += "  RR";
+         else if(rp.test_count > 0) rp_line += "  " + IntegerToString(rp.test_count) + "x";
 
          DashLabel(OBJECT_PREFIX + "DASH_RP" + IntegerToString(shown),
-                   x_base, y_base + row * DASH_ROW_HEIGHT,
+                   x, y + row * DASH_ROW_HEIGHT,
                    rp_line, GetRPColor(best_idx), fs);
          row++;
          shown++;
       }
    }
 
-   //--- Fill empty rows if < 2 shown
    for(int f = shown; f < 2; f++)
    {
       DashLabel(OBJECT_PREFIX + "DASH_RP" + IntegerToString(f),
-                x_base, y_base + row * DASH_ROW_HEIGHT,
-                "(no RP)", clrDarkGray, fs);
+                x, y + row * DASH_ROW_HEIGHT,
+                ShortToString(0x00B7) + " ---", DASH_DIM_COLOR, fs);
       row++;
    }
 
-   //=== ROW: Separator ===
-   DashLabel(OBJECT_PREFIX + "DASH_SEP3", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "--------------------------------------------",
-             DASH_BORDER_COLOR, fs - 1);
+   //=== RADAR ===
+   DashLabel(OBJECT_PREFIX + "DASH_SEP3", x, y + row * DASH_ROW_HEIGHT,
+             DashSep(44), DASH_ACCENT_COLOR, fs - 2);
    row++;
 
-   //=== RADAR: Top 5 nearest ===
-   DashLabel(OBJECT_PREFIX + "DASH_RADAR_HDR", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "RADAR  (top 5 nearest)", clrWhite, fs);
+   UpdateRadar(x, y + row * DASH_ROW_HEIGHT, fs);
+   row += 2;
+
+   //=== FOOTER: Counts + Hit Rate ===
+   DashLabel(OBJECT_PREFIX + "DASH_SEP4", x, y + row * DASH_ROW_HEIGHT,
+             DashSep(44), DASH_ACCENT_COLOR, fs - 2);
    row++;
 
-   UpdateRadar(x_base, y_base + row * DASH_ROW_HEIGHT, fs);
-   row += 2; // radar takes ~2 rows
-
-   //=== ROW: Separator ===
-   DashLabel(OBJECT_PREFIX + "DASH_SEP4", x_base, y_base + row * DASH_ROW_HEIGHT,
-             "--------------------------------------------",
-             DASH_BORDER_COLOR, fs - 1);
-   row++;
-
-   //=== ROW: Status line ===
-   int role_rev_count = 0;
-   int active_zone_count = 0;
+   int active_cnt = 0, rev_cnt = 0;
    for(int i = 0; i < g_rp_count; i++)
    {
       if(!g_rp_array[i].is_active) continue;
-      active_zone_count++;
-      if(g_rp_array[i].is_role_reversed) role_rev_count++;
+      active_cnt++;
+      if(g_rp_array[i].is_role_reversed) rev_cnt++;
    }
 
-   int active_setup_count = 0;
+   int setup_cnt = 0;
    for(int i = 0; i < g_setup_count; i++)
-      if(g_setup_array[i].is_active) active_setup_count++;
+      if(g_setup_array[i].is_active) setup_cnt++;
 
-   string status = "Zones:" + IntegerToString(active_zone_count) +
-                   "  Conf:" + IntegerToString(g_confluence_count) +
-                   "  RevR:" + IntegerToString(role_rev_count) +
-                   "  Setups:" + IntegerToString(active_setup_count) +
-                   "  Obj:" + IntegerToString(g_object_count) + "/" +
-                   IntegerToString(MAX_CHART_OBJECTS);
-
-   DashLabel(OBJECT_PREFIX + "DASH_STATUS", x_base, y_base + row * DASH_ROW_HEIGHT,
-             status, clrWhite, fs);
-   row++;
-
-   //=== ROW: HTF + Hit Rate ===
-   string htf_line = "HTF: ";
-   if(g_show_htf_1) htf_line += TFToString(g_htf_1) + " ";
-   if(g_show_htf_2) htf_line += TFToString(g_htf_2);
+   string footer = IntegerToString(active_cnt) + "z  " +
+                   IntegerToString(g_confluence_count) + "c  " +
+                   IntegerToString(rev_cnt) + "rr  " +
+                   IntegerToString(setup_cnt) + "s";
 
    if(g_show_performance_stats)
    {
       int total_decided = g_stats.total_reacted + g_stats.total_broken;
       int hit_pct = (total_decided > 0) ?
                     (int)MathRound((double)g_stats.total_reacted / (double)total_decided * 100.0) : 0;
-      htf_line += "  |  Hit Rate: " + IntegerToString(hit_pct) + "% (" +
-                  IntegerToString(g_stats.total_reacted) + "/" +
-                  IntegerToString(total_decided) + ")";
+      footer += "  " + ShortToString(0x2502) + "  Hit " +
+                IntegerToString(hit_pct) + "%";
    }
 
-   DashLabel(OBJECT_PREFIX + "DASH_HTF", x_base, y_base + row * DASH_ROW_HEIGHT,
-             htf_line, clrWhite, fs);
+   DashLabel(OBJECT_PREFIX + "DASH_FOOTER", x, y + row * DASH_ROW_HEIGHT,
+             footer, DASH_DIM_COLOR, fs - 1);
    row++;
 
-   //=== ROW: Active Entry Setup (if any) ===
-   bool has_active_setup = false;
-   for(int s = 0; s < g_setup_count; s++)
-   {
-      if(!g_setup_array[s].is_active) continue;
-      SEntrySetup setup = g_setup_array[s];
+   // P28: Entry setup row removed — clean dashboard, zones only
 
-      string dir = (setup.direction == RP_SUPPORT) ? "BUY" : "SELL";
-      color  dir_color = (setup.direction == RP_SUPPORT) ? g_color_entry_buy : g_color_entry_sell;
-
-      string setup_line = dir + "@" +
-                          DoubleToString(setup.entry_price, digits) +
-                          "  SL:" + DoubleToString(setup.sl_pips, 0) + "p" +
-                          "  TP1:" + DoubleToString(setup.tp1_pips, 0) + "p" +
-                          "  R:R=1:" + DoubleToString(setup.rr_ratio1, 1);
-
-      DashLabel(OBJECT_PREFIX + "DASH_SETUP", x_base, y_base + row * DASH_ROW_HEIGHT,
-                setup_line, dir_color, fs);
-      row++;
-      has_active_setup = true;
-      break; // show only first active setup
-   }
-
-   if(!has_active_setup)
-   {
-      //--- Hide setup row
-      string setup_name = OBJECT_PREFIX + "DASH_SETUP";
-      if(ObjectFind(0, setup_name) >= 0)
-         ObjectSetString(0, setup_name, OBJPROP_TEXT, "");
-   }
-
-   //=== Resize background to fit content ===
+   //=== Resize BG to fit ===
    string bg_name = OBJECT_PREFIX + "DASH_BG";
    if(ObjectFind(0, bg_name) >= 0)
-   {
-      int total_height = row * DASH_ROW_HEIGHT + DASH_PADDING * 2;
-      ObjectSetInteger(0, bg_name, OBJPROP_YSIZE, total_height);
-   }
+      ObjectSetInteger(0, bg_name, OBJPROP_YSIZE, row * DASH_ROW_HEIGHT + DASH_PADDING * 2);
 }
 
 //+------------------------------------------------------------------+
@@ -435,14 +381,14 @@ void UpdateRadar(int x_base, int y_start, int fs)
       }
    }
 
-   //--- RES above, SUP below
-   if(StringLen(res_line) == 0) res_line = "(none)";
-   if(StringLen(sup_line) == 0) sup_line = "(none)";
+   //--- RES above, SUP below — color-coded
+   if(StringLen(res_line) == 0) res_line = "---";
+   if(StringLen(sup_line) == 0) sup_line = "---";
 
    DashLabel(OBJECT_PREFIX + "DASH_RADAR_RES", x_base, y_start,
-             "R: " + res_line, clrTomato, fs - 1);
+             ShortToString(0x25BC) + " R  " + res_line, g_color_resistance, fs - 1);
    DashLabel(OBJECT_PREFIX + "DASH_RADAR_SUP", x_base, y_start + DASH_ROW_HEIGHT,
-             "S: " + sup_line, clrLime, fs - 1);
+             ShortToString(0x25B2) + " S  " + sup_line, g_color_support, fs - 1);
 }
 
 //+------------------------------------------------------------------+

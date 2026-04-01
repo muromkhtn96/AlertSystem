@@ -3398,9 +3398,278 @@ PHASE 7 — Reliability + Performance (cần Phase 6):
   P24: Zone Precision Enhancement    (sửa RP_Defines.mqh, RP_Detection.mqh)
   P25: Test Quality & Zone Absorption (sửa RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh)
   P26: Zone Data Logger              (tạo RP_Logger.mqh, sửa RP_Detection.mqh, RP_Main.mq5)
+  P27: Zone Scoring Effectiveness    (sửa RP_Scoring.mqh)
 
-  P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26
-  P26 chạy cuối cùng — logging cần tất cả features hoạt động đúng trước
+  P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27
+  P27 cần P18+P24+P25 — cải thiện pattern direction, zone precision gradient, volume-session
+```
+
+---
+
+## PROMPT 27: Zone Scoring Effectiveness Enhancement (Sửa RP_Scoring.mqh)
+
+```
+Nâng cao hiệu quả scoring zone bằng 3 cải tiến: pattern direction alignment, zone precision gradient, volume-session normalization.
+Sửa file: RP_Scoring.mqh
+Phụ thuộc: P18 (Rebalance), P24 (Zone Precision), P25 (Test Quality)
+
+=== P27a: CANDLE PATTERN DIRECTION ALIGNMENT ===
+
+MỤC ĐÍCH: Hiện tại CalcBaseScore cộng điểm candle pattern bất kể hướng.
+Bearish engulfing tại Support zone không có ý nghĩa — nó CONFIRM breakout, không phải rejection.
+Cần scoring pattern theo hướng phù hợp với zone type.
+
+THAY THẾ block candle pattern trong CalcBaseScore() bằng CalcPatternDirectionScore():
+
+  double CalcPatternDirectionScore(int rp_index):
+    1. Lấy base_val từ pattern type (Pinbar=12, Engulfing=10, OutsideBar=8, LargeWick=6)
+    2. Xác định hướng nến tại bar_formed: is_bullish = (close > open)
+    3. Alignment check:
+       - Support zone muốn bullish reaction (rejection lên)
+       - Resistance zone muốn bearish reaction (rejection xuống)
+    4. Scoring:
+       - Outside Bar: luôn 75% base_val (direction-neutral)
+       - Aligned: 100% base_val
+       - Misaligned: 30% base_val
+       - Unknown (open=0 hoặc close=0): 50% base_val
+
+  Trong CalcBaseScore(), thay:
+    switch(rp.candle_pattern) { case PATTERN_PINBAR: score += 12.0; ... }
+  Bằng:
+    score += CalcPatternDirectionScore(rp_index);  // P27a
+
+IMPACT:
+  Aligned pinbar tại Support: 12.0 (không đổi)
+  Misaligned pinbar tại Support (bearish): 12 × 0.3 = 3.6 (giảm 70%)
+  Outside Bar: 8 × 0.75 = 6.0 (giảm nhẹ, direction-neutral)
+  → Zone với pattern phù hợp sẽ score cao hơn đáng kể
+
+
+=== P27b: ZONE PRECISION GRADIENT (LINEAR INTERPOLATION) ===
+
+MỤC ĐÍCH: CalcZonePrecisionScore dùng step function:
+  width < 0.3×ATR → +5, width > 0.8×ATR → -5, giữa = 0.
+Zone 0.31×ATR và 0.79×ATR đều score 0 — khác biệt precision rất lớn nhưng không phản ánh.
+
+THAY THẾ CalcZonePrecisionScore() width logic bằng linear gradient:
+
+  double CalcZonePrecisionScore(int rp_index):
+    width_ratio = zone_width / g_cached_atr14;
+
+    // Linear gradient thay vì step function:
+    if(width_ratio <= 0.15):      score += 5.0;                                        // Ultra-tight
+    elif(width_ratio <= 0.30):    score += 5.0 - (width_ratio - 0.15) / 0.15 * 3.0;   // 5.0 → 2.0
+    elif(width_ratio <= 0.55):    score += 2.0 - (width_ratio - 0.30) / 0.25 * 2.0;   // 2.0 → 0.0
+    elif(width_ratio <= 0.80):    score += 0.0 - (width_ratio - 0.55) / 0.25 * 2.0;   // 0.0 → -2.0
+    elif(width_ratio <= 1.20):    score += -2.0 - (width_ratio - 0.80) / 0.40 * 3.0;  // -2.0 → -5.0
+    else:                         score -= 5.0;                                        // Max penalty
+
+    // Retest-refined và wick filter giữ nguyên logic cũ
+    Range vẫn: [-5, +13]
+
+IMPACT:
+  Zone 0.20×ATR: trước +5, sau +3.0 (vẫn positive)
+  Zone 0.40×ATR: trước 0, sau +0.8 (nhận credit nhẹ)
+  Zone 0.70×ATR: trước 0, sau -1.2 (bị phạt nhẹ)
+  Zone 0.90×ATR: trước -5, sau -2.75 (penalty giảm, smoother)
+  → Scoring phản ánh chính xác hơn quality spectrum
+
+
+=== P27c: VOLUME-SESSION INTEGRATION ===
+
+MỤC ĐÍCH: CalcVolumeScore dùng g_cached_volume_ma20 (MA20 toàn session).
+Volume Asian = 40-60% volume London. MA20 tính trung bình cả ngày → Asian zone
+hiếm khi đạt 1.5x threshold → bị thiệt thòi.
+Cần normalize volume baseline theo session.
+
+THÊM 2 functions MỚI vào RP_Scoring.mqh (TRƯỚC CalcVolumeScore):
+
+  1. GetSessionVolumeMultiplier(ENUM_SESSION session): double
+     Trả về multiplier để adjust MA20 threshold:
+       SESSION_OVERLAP:     1.00  (baseline — highest liquidity)
+       SESSION_LONDON_OPEN: 1.00
+       SESSION_NY_OPEN:     1.00
+       SESSION_LONDON:      1.05
+       SESSION_NY:          1.05
+       SESSION_ASIAN:       0.70  (lower baseline → threshold thấp hơn)
+       SESSION_DEAD:        0.60  (lowest baseline)
+
+  2. SỬA CalcVolumeScore(int bar_shift) → CalcVolumeScore(int bar_shift, ENUM_SESSION session_formed):
+     - Thêm parameter session_formed
+     - adjusted_ma20 = g_cached_volume_ma20 × GetSessionVolumeMultiplier(session_formed)
+     - vol_ratio = tick_vol / adjusted_ma20
+     - Gradient scoring (4 bậc thay vì 2):
+         vol_ratio > 2.0 → 15  (extreme spike)
+         vol_ratio > 1.5 → 12  (strong volume)
+         vol_ratio > 1.2 → 8   (above average)
+         vol_ratio > 1.0 → 3   (slightly above)
+         else → 0
+
+  Trong CalcBaseScore(), sửa lời gọi:
+    CalcVolumeScore(rp.bar_formed)
+    → CalcVolumeScore(rp.bar_formed, rp.session_formed)
+
+IMPACT:
+  Asian zone với 120% volume (vs global MA20):
+    Trước: 0 điểm (< 1.2x)
+    Sau: adjusted_ma20 = MA20 × 0.7 → vol_ratio = 1.2/0.7 = 1.71 → 12 điểm
+  London zone với 130% volume:
+    Trước: 8 điểm (> 1.2x)
+    Sau: vol_ratio = 1.3/1.05 = 1.24 → 8 điểm (tương đương)
+  → Asian/Dead zone với volume tốt (relative) sẽ được công nhận đúng mức
+
+
+=== TỔNG HỢP THAY ĐỔI ===
+
+File sửa: RP_Scoring.mqh
+Functions thêm: CalcPatternDirectionScore(), GetSessionVolumeMultiplier()
+Functions sửa: CalcVolumeScore() (thêm param), CalcZonePrecisionScore() (gradient), CalcBaseScore() (calls)
+
+Base Score max: vẫn 100 (MathMin cap)
+Final Score max: vẫn 150 (SCORE_CAP)
+Không thay đổi struct, không thay đổi file khác.
+```
+
+---
+
+---
+
+## PROMPT 28: UI Redesign — Modern Zone Rendering (Sửa RP_Utils.mqh + RP_Drawing.mqh + RP_Dashboard.mqh)
+
+```
+Tinh chỉnh UI đơn giản nhưng mượt mà. Mục tiêu: professional dark-theme, dễ đọc, giảm visual clutter.
+Sửa file: RP_Utils.mqh, RP_Drawing.mqh, RP_Dashboard.mqh
+Phụ thuộc: P14 (Drawing), P16 (Dashboard) — override visual layer, logic không đổi
+Demo HTML: docs/UI_DEMO.html
+
+=== P28a: COLOR PALETTE — MUTED, TYPE-AWARE ===
+
+Thay đổi globals trong RP_Utils.mqh:
+
+  // Thay thế saturated colors bằng muted professional palette
+  g_color_premium       = C'255,200,60';    // Warm gold
+  g_color_level1        = C'220,80,80';     // Muted crimson
+  g_color_level2        = C'200,140,60';    // Warm amber
+  g_color_level3        = C'100,160,210';   // Steel blue
+  g_color_confluence    = C'160,120,220';   // Soft purple
+  g_color_role_reversal = C'200,100,200';   // Soft magenta
+  g_color_entry_buy     = C'60,200,120';    // Mint green
+  g_color_entry_sell    = C'220,70,70';     // Soft red
+
+  // THÊM MỚI — type-aware zone colors:
+  g_color_support       = C'60,180,130';    // Teal (support)
+  g_color_resistance    = C'200,90,90';     // Coral (resistance)
+
+
+=== P28b: ZONE RENDERING — FILL + EDGE LINES ===
+
+Sửa RP_Drawing.mqh:
+
+1. GetLevelAlpha() — giảm alpha để fill mềm hơn:
+   PREMIUM=55, LV1=40, LV2=28, LV3=18 (trước: 80,70,50,35)
+
+2. THÊM GetEdgeWidth(ENUM_RP_LEVEL):
+   PREMIUM=3px, LV1=2px, LV2/LV3=1px
+
+3. THÊM GetZoneBaseColor(int rp_index):
+   Support → g_color_support (teal family)
+   Resistance → g_color_resistance (coral family)
+   Premium → g_color_premium (gold) bất kể type
+   Confluence → g_color_confluence
+   RoleRev → g_color_role_reversal
+
+4. SỬA DrawRPZone() — thêm 2 OBJ_TREND edge lines:
+   Mỗi zone gồm 3 objects:
+     ZONE_{id}:   OBJ_RECTANGLE fill (soft transparent)
+     EDGE_H_{id}: OBJ_TREND tại zone_high (crisp solid line)
+     EDGE_L_{id}: OBJ_TREND tại zone_low (crisp solid line)
+
+   Edge color = BlendColor(fg, bg, alpha+40) — sáng hơn fill
+   Edge width theo GetEdgeWidth()
+   RAY_LEFT=false, RAY_RIGHT=false
+
+5. SỬA DrawRPLabel() — compact, positioned at zone edge:
+   Format: ◆P  S 124 ██████▒░  H1  Fresh
+   Position: zone_high cho resistance (ANCHOR_LEFT_LOWER)
+             zone_low cho support (ANCHOR_LEFT_UPPER)
+   Time: time_formed (đầu zone, không phải cuối)
+
+6. SỬA DeleteRPObjects() — thêm EDGE_H_, EDGE_L_ vào cleanup
+
+
+=== P28c: DASHBOARD — COMPACT MODERN ===
+
+Sửa RP_Dashboard.mqh:
+
+1. Layout constants:
+   DASH_WIDTH=340 (giảm từ 380)
+   DASH_ROW_HEIGHT=17 (giảm từ 18)
+   DASH_BG_COLOR=C'16,20,28' (darker)
+   DASH_BORDER_COLOR=C'40,48,62'
+   Thêm: DASH_ACCENT_COLOR=C'55,65,85', DASH_DIM_COLOR=C'90,100,120'
+
+2. Separator: thay "----" bằng Unicode box drawing ─ (U+2500)
+   Thêm DashSep(int char_count) helper
+
+3. Layout mới (compact):
+   Row 0: "RP v3.0  EURUSD  H1"                    (title)
+   Row 1: "London Open │ TREND 28 │ BUY preferred"  (session+regime+bias)
+   ─────────────────                                  (thin sep)
+   Row 2: "ATR 12.4p  Sprd 1.2p  News clear"        (metrics, dim)
+   ─────────────────
+   Row 3: "▲ C  1.09580  124  7p  Fresh"             (nearest RP 1)
+   Row 4: "▼ R  1.10320  92  38p  2x"                (nearest RP 2)
+   ─────────────────
+   Row 5-6: Radar (▼ R / ▲ S)                        (unchanged logic)
+   ─────────────────
+   Row 7: "12z  3c  1rr  1s  │  Hit 72%"            (footer compact)
+   Row 8: "► BUY 1.09650  SL:35  R:R 1:2.1"         (setup if active)
+
+4. Unicode symbols:
+   ▲ (U+25B2) support / ▼ (U+25BC) resistance
+   │ (U+2502) vertical separator
+   ► (U+25BA) setup arrow
+   · (U+00B7) empty placeholder
+
+5. Background auto-resize giữ nguyên logic cũ
+
+
+=== TÓM TẮT THAY ĐỔI ===
+
+File sửa:
+  RP_Utils.mqh:     2 color globals mới (g_color_support, g_color_resistance)
+  RP_Drawing.mqh:   GetLevelAlpha, GetEdgeWidth, GetZoneBaseColor, DrawRPZone, DrawRPLabel, DeleteRPObjects
+  RP_Dashboard.mqh: Layout constants, DashSep, UpdateDashboard, UpdateRadar
+
+Không thay đổi:
+  Logic scoring, detection, confluence, alerts — chỉ visual layer
+  Struct definitions — không thêm field
+  RP_Main.mq5 — không cần sửa (calls giữ nguyên)
+
+Demo: docs/UI_DEMO.html (mở bằng browser để xem preview)
+```
+
+---
+
+### Dependency Graph (cập nhật)
+
+```text
+PHASE 7 — Reliability + Performance (cần Phase 6):
+  P18: Rebalance Scoring Weights        (sửa RP_Scoring.mqh, RP_Detection.mqh)
+  P19: Fibonacci Swing-to-Swing         (sửa RP_Defines.mqh, RP_Utils.mqh, RP_Scoring.mqh)
+  P20: Multi-TF Trend Alignment         (sửa RP_Confluence.mqh, RP_Scoring.mqh, RP_EntrySetup.mqh, RP_Main.mq5)
+  P21: Dynamic Zone Width               (sửa RP_Detection.mqh)
+  P22: Pair-Adaptive Parameters         (sửa RP_Utils.mqh, RP_Session.mqh, RP_Main.mq5)
+  P23: Performance Optimization          (sửa RP_Utils.mqh, RP_Detection.mqh, RP_Confluence.mqh, RP_Drawing.mqh)
+
+  P24: Zone Precision Enhancement    (sửa RP_Defines.mqh, RP_Detection.mqh)
+  P25: Test Quality & Zone Absorption (sửa RP_Defines.mqh, RP_Detection.mqh, RP_Scoring.mqh)
+  P26: Zone Data Logger              (tạo RP_Logger.mqh, sửa RP_Detection.mqh, RP_Main.mq5)
+  P27: Zone Scoring Effectiveness    (sửa RP_Scoring.mqh)
+  P28: UI Redesign — Modern Zones    (sửa RP_Utils.mqh, RP_Drawing.mqh, RP_Dashboard.mqh)
+
+  P18+P19 song song → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
+  P28 chạy cuối cùng — UI cần tất cả logic hoạt động đúng trước khi tinh chỉnh visual
 ```
 
 Mỗi session, chỉ cần paste prompt tương ứng. Không cần đọc lại spec.

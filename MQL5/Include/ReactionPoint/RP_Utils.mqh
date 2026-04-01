@@ -146,14 +146,17 @@ bool             g_show_htf_2             = true;
 int              g_label_font_size        = 8;
 
 // Colors
-color  g_color_premium       = clrGold;
-color  g_color_level1        = clrCrimson;
-color  g_color_level2        = clrOrange;
-color  g_color_level3        = clrSkyBlue;
-color  g_color_confluence    = clrMediumPurple;
-color  g_color_role_reversal = clrMagenta;
-color  g_color_entry_buy     = clrLimeGreen;
-color  g_color_entry_sell    = clrRed;
+// P28: Color palette — visible on dark backgrounds, type-differentiated
+color  g_color_premium       = C'255,210,80';    // Warm gold — bright enough to see
+color  g_color_level1        = C'230,100,100';   // Warm red
+color  g_color_level2        = C'210,155,75';    // Amber
+color  g_color_level3        = C'120,175,220';   // Steel blue
+color  g_color_confluence    = C'150,120,210';   // Soft purple
+color  g_color_role_reversal = C'170,110,170';   // Muted magenta (was too bright)
+color  g_color_entry_buy     = C'60,200,120';    // Mint green
+color  g_color_entry_sell    = C'220,70,70';     // Soft red
+color  g_color_support       = C'70,190,140';    // Teal — support zones
+color  g_color_resistance    = C'210,100,100';   // Coral — resistance zones
 
 //+------------------------------------------------------------------+
 //| Global Variables — Performance Cache                             |
