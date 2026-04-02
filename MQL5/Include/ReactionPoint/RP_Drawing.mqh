@@ -423,7 +423,8 @@ void DrawRPLabel(int rp_index)
                       DoubleToString(rp.final_score, 0) + " | " +
                       TFToString(rp.source_tf) + " | " + status_str;
 
-   datetime label_time = TimeCurrent();
+   //--- Position label at right edge of zone (future end) + small offset
+   datetime label_time = TimeCurrent() + PeriodSeconds() * 21;
 
    if(ObjectFind(0, name) < 0)
    {
@@ -442,7 +443,7 @@ void DrawRPLabel(int rp_index)
    ObjectSetInteger(0, name, OBJPROP_COLOR, GetRPColor(rp_index));
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT);
 }
 
 // P28: Entry setup panels and SL/TP lines removed from chart drawing.
@@ -538,7 +539,11 @@ void SuppressOverlappingZones()
    }
    ArrayInitialize(g_rp_display_suppressed, false);
 
-   double overlap_margin = PipsToPrice(g_confluence_merge_pips);
+   //--- Use ATR-based margin: zones within 0.5×ATR of each other are "overlapping"
+   //    This catches visually close zones that pips-based margin misses
+   double atr = g_cached_atr14;
+   if(atr <= 0.0) atr = PipsToPrice(20);
+   double overlap_margin = atr * 0.5;
 
    for(int i = 0; i < g_rp_count; i++)
    {
@@ -552,7 +557,7 @@ void SuppressOverlappingZones()
          if(g_rp_display_suppressed[j]) continue;
          if(g_rp_array[j].final_score < g_min_score_to_show) continue;
 
-         //--- Check price overlap (zones touch or overlap within margin)
+         //--- Check price overlap (zones touch or within ATR-based margin)
          bool overlaps = (g_rp_array[i].zone_low <= g_rp_array[j].zone_high + overlap_margin) &&
                          (g_rp_array[j].zone_low <= g_rp_array[i].zone_high + overlap_margin);
          if(!overlaps) continue;
