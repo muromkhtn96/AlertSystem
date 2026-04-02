@@ -79,6 +79,7 @@ int    g_fibo_tolerance_pips      = 5;
 int    g_min_candle_size_pips     = 3;
 int    g_zone_width_pips          = 4;
 int    g_min_score_to_show        = 40;
+ENUM_RP_LEVEL g_show_min_level    = RP_PREMIUM;  // Min level to display on chart
 bool   g_enable_system_alert       = false;
 bool   g_enable_push_notify       = false;
 int    g_proximity_alert_pips     = 20;
@@ -834,7 +835,8 @@ void ApplyVolatilityScaling()
    double atr_baseline;
    ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
 
-   if(tf <= PERIOD_M30)      atr_baseline = PipsToPrice(15);
+   if(tf <= PERIOD_M15)      atr_baseline = PipsToPrice(10);
+   else if(tf <= PERIOD_M30) atr_baseline = PipsToPrice(15);
    else if(tf <= PERIOD_H1)  atr_baseline = PipsToPrice(25);
    else if(tf <= PERIOD_H4)  atr_baseline = PipsToPrice(50);
    else                      atr_baseline = PipsToPrice(100);

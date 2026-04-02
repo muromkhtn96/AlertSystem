@@ -112,6 +112,7 @@ input ENUM_TIMEFRAMES  HTF_2                  = PERIOD_D1;  // Higher TF 2
 //--- Display
 input int              Zone_Width_Pips        = 4;       // Zone width in pips
 input int              Min_Score_To_Show      = 40;      // Min score to display
+input ENUM_RP_LEVEL    Show_Min_Level         = RP_PREMIUM; // Min level to show (PRE/LV1/LV2/LV3)
 input bool             Show_Dashboard         = true;    // Show dashboard
 input bool             Show_Performance_Stats = true;    // Show hit rate stats
 input bool             Enable_System_Alert    = false;   // Enable Alert() popup
@@ -189,6 +190,7 @@ void ApplyTFPreset()
       g_show_session_background= false;
       g_show_performance_stats = false;
    }
+   g_show_min_level          = Show_Min_Level;
    g_dashboard_corner        = Dashboard_Corner;
    g_dashboard_font_size     = Dashboard_Font_Size;
    g_label_font_size         = Label_Font_Size;
@@ -208,7 +210,8 @@ void ApplyTFPreset()
    if(preset == PRESET_AUTO)
    {
       ENUM_TIMEFRAMES tf = Period();
-      if(tf <= PERIOD_M30)      preset = PRESET_M30;
+      if(tf <= PERIOD_M15)      preset = PRESET_M15;
+      else if(tf <= PERIOD_M30) preset = PRESET_M30;
       else if(tf <= PERIOD_H1)  preset = PRESET_H1;
       else if(tf <= PERIOD_H4)  preset = PRESET_H4;
       else                      preset = PRESET_D1;
@@ -247,6 +250,33 @@ void ApplyTFPreset()
    //--- Apply TF Preset Table values
    switch(preset)
    {
+      case PRESET_M15:
+         g_swing_lookback            = 7;     // 105 min window — filters M15 noise
+         g_min_rp_distance_pips      = 15;    // Tighter spacing for lower volatility
+         g_min_reaction_move_pips    = 15;    // Higher floor — rejects wick noise
+         g_initial_bars_to_scan      = 1000;  // More bars (denser candles)
+         g_breakout_confirm_pips     = 2;     // Faster confirmation
+         g_max_retest_bars           = 50;    // Wider retest window
+         g_decay_interval_bars       = 60;    // ~15 hrs (proportional to M30's 7.5 hrs)
+         g_decay_points_per_interval = 1;     // Gentle decay — zones live longer
+         g_max_rp_age_bars           = 500;   // ~5 days (proportional to M30's ~4 days)
+         g_sl_buffer_pips            = 2;
+         g_entry_buffer_pips         = 1;
+         g_max_setup_age_bars        = 10;
+         g_confluence_merge_pips     = 12;    // Wider merge — M15 zones naturally closer
+         g_htf_bars_to_scan          = 200;
+         g_fibo_lookback_bars        = 100;
+         g_fibo_tolerance_pips       = 4;
+         g_min_candle_size_pips      = 3;     // Stricter — filters small M15 bodies
+         g_zone_width_pips           = 3;
+         g_min_score_to_show         = 55;    // Stricter threshold
+         g_proximity_alert_pips      = 12;
+         g_reset_alert_pips          = 18;
+         g_structure_lookback_bars   = 50;    // More local structure context
+         g_htf_1                     = PERIOD_H1;
+         g_htf_2                     = PERIOD_H4;
+         break;
+
       case PRESET_M30:
          g_swing_lookback            = 5;
          g_min_rp_distance_pips      = 25;

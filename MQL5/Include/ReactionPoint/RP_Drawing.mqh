@@ -113,8 +113,8 @@ void DrawRPZone(int rp_index)
    SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
 
-   //--- Clean mode: only draw Premium + Level 1
-   if(g_clean_chart_mode && rp.rp_level != RP_PREMIUM && rp.rp_level != RP_LEVEL1)
+   //--- Level filter: skip zones below minimum display level
+   if(rp.rp_level > g_show_min_level)
       return;
 
    string id_str    = IntegerToString(rp.id);
@@ -396,6 +396,7 @@ void DrawRPLabel(int rp_index)
    SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
    if(rp.final_score < g_min_score_to_show) return;
+   if(rp.rp_level > g_show_min_level) return;
 
    string name = OBJECT_PREFIX + "LBL_" + IntegerToString(rp.id);
 
@@ -595,6 +596,7 @@ void InitDrawState()
    ArrayResize(g_prev_suppressed, MAX_RP_COUNT);
 
    ArrayInitialize(g_prev_scores, -1.0);
+   ArrayInitialize(g_prev_types, RP_SUPPORT);
    ArrayInitialize(g_prev_active, false);
    ArrayInitialize(g_prev_conf, false);
    ArrayInitialize(g_prev_role_rev, false);
@@ -660,8 +662,7 @@ void RedrawChangedRP()
          {
             //--- Full redraw: color, edges, prices, time
             DrawRPZone(i);
-            if(!g_clean_chart_mode || rp.rp_level == RP_PREMIUM || rp.rp_level == RP_LEVEL1)
-               DrawRPLabel(i);
+            DrawRPLabel(i);
          }
          else
          {
