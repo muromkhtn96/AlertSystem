@@ -18,6 +18,8 @@ static bool          g_prev_active[];
 static bool          g_prev_conf[];
 static bool          g_prev_role_rev[];
 static double        g_prev_opacity[];
+static bool          g_rp_display_suppressed[];  // overlap suppression: hide weaker overlapping zones
+static bool          g_prev_suppressed[];        // previous frame suppression state for change detection
 static bool          g_draw_state_initialized = false;
 
 //+------------------------------------------------------------------+
@@ -227,6 +229,16 @@ void DrawConfluenceGlow(int conf_index)
    //--- Only for zones with 3+ RPs
    if(zone.rp_count < 3) return;
 
+   //--- Skip glow if all component RPs are display-suppressed
+   bool all_suppressed = true;
+   for(int k = 0; k < zone.rp_count; k++)
+   {
+      int r = FindRPIndexByID(zone.rp_ids[k]);
+      if(r >= 0 && !g_rp_display_suppressed[r])
+      { all_suppressed = false; break; }
+   }
+   if(all_suppressed) return;
+
    color bg = GetChartBackground();
    double pip_ext = PipsToPrice(2);
    double pip_mid = PipsToPrice(1);
@@ -320,7 +332,7 @@ string GetLevelIcon(ENUM_RP_LEVEL level)
 {
    switch(level)
    {
-      case RP_PREMIUM: return "PREMIUM";
+      case RP_PREMIUM: return "PRE";
       case RP_LEVEL1:  return "LV1";
       case RP_LEVEL2:  return "LV2";
       case RP_LEVEL3:  return "LV3";
@@ -409,8 +421,7 @@ void DrawRPLabel(int rp_index)
 
    string full_text = GetLevelIcon(rp.rp_level) + " | " + type_str + " " +
                       DoubleToString(rp.final_score, 0) + " | " +
-                      TFToString(rp.source_tf) + " | Tested:" +
-                      IntegerToString(rp.test_count) + "x | " + status_str;
+                      TFToString(rp.source_tf) + " | " + status_str;
 
    datetime label_time = TimeCurrent();
 
@@ -515,6 +526,56 @@ void UpdateSessionVisibility()
 }
 
 //+------------------------------------------------------------------+
+//| SuppressOverlappingZones — keep only strongest zone per overlap    |
+//|   Priority: Premium > higher final_score > lower index             |
+//|   Suppressed zones are hidden from drawing but remain active       |
+//+------------------------------------------------------------------+
+void SuppressOverlappingZones()
+{
+   if(ArraySize(g_rp_display_suppressed) < MAX_RP_COUNT)
+   {
+      ArrayResize(g_rp_display_suppressed, MAX_RP_COUNT);
+   }
+   ArrayInitialize(g_rp_display_suppressed, false);
+
+   double overlap_margin = PipsToPrice(g_confluence_merge_pips);
+
+   for(int i = 0; i < g_rp_count; i++)
+   {
+      if(!g_rp_array[i].is_active) continue;
+      if(g_rp_display_suppressed[i]) continue;
+      if(g_rp_array[i].final_score < g_min_score_to_show) continue;
+
+      for(int j = i + 1; j < g_rp_count; j++)
+      {
+         if(!g_rp_array[j].is_active) continue;
+         if(g_rp_display_suppressed[j]) continue;
+         if(g_rp_array[j].final_score < g_min_score_to_show) continue;
+
+         //--- Check price overlap (zones touch or overlap within margin)
+         bool overlaps = (g_rp_array[i].zone_low <= g_rp_array[j].zone_high + overlap_margin) &&
+                         (g_rp_array[j].zone_low <= g_rp_array[i].zone_high + overlap_margin);
+         if(!overlaps) continue;
+
+         //--- Determine winner: premium first, then score
+         int winner = i, loser = j;
+         bool i_premium = (g_rp_array[i].rp_level == RP_PREMIUM);
+         bool j_premium = (g_rp_array[j].rp_level == RP_PREMIUM);
+
+         if(j_premium && !i_premium)
+         { winner = j; loser = i; }
+         else if(i_premium == j_premium && g_rp_array[j].final_score > g_rp_array[i].final_score)
+         { winner = j; loser = i; }
+
+         g_rp_display_suppressed[loser] = true;
+
+         //--- If loser was i, i is now suppressed — stop comparing i
+         if(loser == i) break;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| InitDrawState — initialize state tracking arrays                   |
 //+------------------------------------------------------------------+
 void InitDrawState()
@@ -525,12 +586,15 @@ void InitDrawState()
    ArrayResize(g_prev_conf, MAX_RP_COUNT);
    ArrayResize(g_prev_role_rev, MAX_RP_COUNT);
    ArrayResize(g_prev_opacity, MAX_RP_COUNT);
+   ArrayResize(g_rp_display_suppressed, MAX_RP_COUNT);
+   ArrayResize(g_prev_suppressed, MAX_RP_COUNT);
 
    ArrayInitialize(g_prev_scores, -1.0);
    ArrayInitialize(g_prev_active, false);
    ArrayInitialize(g_prev_conf, false);
    ArrayInitialize(g_prev_role_rev, false);
    ArrayInitialize(g_prev_opacity, -1.0);
+   ArrayInitialize(g_prev_suppressed, false);
 
    //--- Label collision tracking array
    ArrayResize(g_label_placed_prices, MAX_RP_COUNT);
@@ -550,6 +614,9 @@ void RedrawChangedRP()
    //--- Reset label collision tracker for this redraw pass
    ResetLabelCollision();
 
+   //--- Suppress weaker overlapping zones (keep strongest per overlap group)
+   SuppressOverlappingZones();
+
    //--- Extend time_end for all active zones every call (lightweight)
    //    This ensures zones always reach current candle + 20 bars ahead,
    //    even when no state change triggers a full redraw.
@@ -567,13 +634,21 @@ void RedrawChangedRP()
       if(g_prev_conf[i] != rp.is_confluence)       changed = true;
       if(g_prev_role_rev[i] != rp.is_role_reversed) changed = true;
       if(MathAbs(g_prev_opacity[i] - rp.display_opacity) > 1.0) changed = true;
+      if(g_rp_display_suppressed[i] != g_prev_suppressed[i]) changed = true;
 
       //--- RP became inactive → delete its objects
       if(!rp.is_active && g_prev_active[i])
       {
          DeleteRPObjects(rp.id);
-         changed = true;  // Force state update
+         changed = true;
       }
+      //--- RP is suppressed by overlap → hide its objects
+      else if(g_rp_display_suppressed[i])
+      {
+         DeleteRPObjects(rp.id);
+         changed = true;
+      }
+      //--- RP is active and not suppressed → draw or extend
       else if(rp.is_active)
       {
          if(changed)
@@ -605,6 +680,7 @@ void RedrawChangedRP()
       g_prev_conf[i]     = rp.is_confluence;
       g_prev_role_rev[i] = rp.is_role_reversed;
       g_prev_opacity[i]  = rp.display_opacity;
+      g_prev_suppressed[i] = g_rp_display_suppressed[i];
    }
 
    //--- Redraw confluence glows only when confluence zones changed (skip in clean mode)
