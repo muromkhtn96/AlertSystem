@@ -79,6 +79,7 @@ int    g_sl_buffer_pips, g_entry_buffer_pips, g_max_setup_age_bars;
 int    g_confluence_merge_pips, g_htf_bars_to_scan;
 int    g_fibo_lookback_bars, g_fibo_tolerance_pips, g_min_candle_size_pips;
 int    g_zone_width_pips, g_min_score_to_show;
+ENUM_RP_LEVEL g_show_min_level = RP_PREMIUM;  // Min level to display on chart
 int    g_proximity_alert_pips, g_reset_alert_pips;
 ENUM_TIMEFRAMES g_htf_1, g_htf_2;
 double g_reaction_atr_multiplier;
@@ -165,7 +166,7 @@ ENUM_SESSION        { SESSION_ASIAN, SESSION_LONDON_OPEN, SESSION_LONDON,
                       SESSION_NY_OPEN, SESSION_NY, SESSION_OVERLAP, SESSION_DEAD }
 ENUM_CANDLE_PATTERN { PATTERN_NONE, PATTERN_PINBAR, PATTERN_ENGULFING,
                       PATTERN_OUTSIDE_BAR, PATTERN_LARGE_WICK }
-ENUM_TF_PRESET      { PRESET_AUTO, PRESET_M30, PRESET_H1, PRESET_H4, PRESET_D1, PRESET_CUSTOM }
+ENUM_TF_PRESET      { PRESET_AUTO, PRESET_M15, PRESET_M30, PRESET_H1, PRESET_H4, PRESET_D1, PRESET_CUSTOM }
 ENUM_DASH_CORNER    { DASH_TOP_LEFT, DASH_TOP_RIGHT, DASH_BOTTOM_LEFT, DASH_BOTTOM_RIGHT }
 ENUM_STRUCTURE_STATE { STRUCTURE_BULLISH, STRUCTURE_BEARISH, STRUCTURE_NONE }
 
@@ -412,6 +413,8 @@ PERFORMANCE: gọi mỗi 5 phút (300s), KHÔNG mỗi bar. Exponential backoff k
    - Match → check Candle Pattern → check Momentum → CreateRP
 
 2. CreateRP(type, bar_index, price, pattern, reaction_pips):
+   - **Session gate (v3.2)**: M15/M30 reject zones formed during SESSION_DEAD
+   - **Adaptive reaction floor (v3.2)**: M15/M30 enforce min reaction = max(preset, 0.6×ATR)
    - id = g_next_rp_id++, source_tf = Period(), session_formed = g_current_session
    - day_of_week_formed từ MqlDateTime
    - P29 OB detection: ob_bar = FindOrderBlockBar(bar_index, rp_type, 5)
@@ -421,7 +424,9 @@ PERFORMANCE: gọi mỗi 5 phút (300s), KHÔNG mỗi bar. Exponential backoff k
      OB found → zone = body range (institutional standard), is_order_block=true
      Fallback → P21 logic: SUPPORT=bar_low..body_top, RESISTANCE=body_bottom..bar_high
    - P30: ExpandZoneWithBase(rp, zone_bar, 3) — multi-candle base
-   - P24a Wick filter: wick>=60% range → zone=30% range bám sát wick tip
+   - P24a Wick filter (v3.2 TF-adaptive):
+     M15/M30: wick>=50% range → zone=25% range (stricter)
+     H1+: wick>=60% range → zone=30% range (standard)
    - P24b ATR cap: M1-M15=0.5×ATR, M30-H4=0.7×ATR, D1+=1.0×ATR
    - P24c: zone_high_original/zone_low_original lưu sau safety clamps
    - Min width floor: PipsToPrice(g_zone_width_pips/2)
@@ -549,6 +554,7 @@ CalcFinalScore(rp_index):
     + GetStructureScoreAdj(rp_index)        // H: [-20, +15]
     + GetLiquiditySweepBonus(rp_index)      // H: [0, +20]
     + GetTrendAlignmentScore(rp_type)       // P20: [-25, +20]
+    + CalcHTFNestingBonus(rp_index)         // v3.2: [0, +30] HTF zone nesting
     + CalcAbsorptionAdj(rp_index)           // P25b: [-10, +5]
     + (is_role_reversed ? 15.0 : 0.0)
     + (is_fresh && test_count==0 ? 10.0 : 0.0)
@@ -613,6 +619,13 @@ P20: GetTrendAlignmentScore(rp_type):
    - CHoCH exception: penalty×0.5
 
 P20: IsTrendAligned(rp_type): return GetTrendAlignmentScore >= 0
+
+v3.2: CalcHTFNestingBonus(rp_index): [0, +30]
+   - Check if zone is confirmed by HTF swing points (same type: support↔support)
+   - HTF1 nesting (within 1.0×ATR): +12 (e.g. H1 confirms M15)
+   - HTF2 nesting (within 1.5×ATR): +20 (e.g. H4 confirms M15)
+   - Both HTF1+HTF2 confirmed: +30 (full chain: M15→H1→H4)
+   - Enables top-down workflow: H4 zone → H1 confirm → M15 entry
 ```
 
 ---
@@ -682,22 +695,29 @@ P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
    P28: GetZoneBaseColor: Support→teal, Resistance→coral, Premium→gold bất kể type
 
 2. DrawRPZone(rp_index):
+   - **v3.2 Level filter**: skip zones below g_show_min_level (default: RP_PREMIUM only)
    - OBJ_RECTANGLE FILL+BACK, time_formed→now+20bars
    - P28: +2 OBJ_TREND edge lines (EDGE_H_{id}, EDGE_L_{id}), width theo level
    - P23: lazy update — static props 1 lần, chỉ update time_end. Color/price CHỈ khi dirty
 
 3. DrawConfluenceGlow(conf_index): 3+ RP → 3 chồng rectangles (14%, 30%, 50%)
+   - **v3.2**: skip glow if all component RPs are display-suppressed
 
-4. DrawRPLabel(rp_index): P28 compact format
-   - ◆P S 124 ██████▒░ H1 Fresh
-   - Resistance trên zone, Support dưới zone
+4. DrawRPLabel(rp_index): v3.2 compact format
+   - PRE | CONFLUENCE 150 | H1 | Fresh  (removed "Tested:Nx")
+   - Level icons: PRE / LV1 / LV2 / LV3
+   - **v3.2**: label positioned at right edge of zone (+21 bars, ANCHOR_LEFT)
    - v3.0.2: collision tracking — nudge nếu < 1.5× zone_width_pips
 
 5. DrawEntrySetupPanel(setup_index): panel BUY/SELL trên chart
 6. DrawSLTPLines(setup_index): SL=FireBrick dash, TP=Khaki dot, Entry=solid
 7. CreateSessionObjects(): 1 LẦN trong OnInit, colors blend 10%
 7b. UpdateSessionVisibility(): mỗi bar, chỉ update OBJPROP_TIME
-8. RedrawChangedRP(): CHỈ vẽ lại RP có state thay đổi (static prev arrays compare)
+8. RedrawChangedRP():
+   - **v3.2 SuppressOverlappingZones()**: ATR×0.5 margin, keep strongest (Premium priority)
+     g_rp_display_suppressed[] + g_prev_suppressed[] for state change detection
+     Suppressed zones: objects deleted, auto-restored when winner expires
+   - CHỈ vẽ lại RP có state thay đổi (static prev arrays compare)
 9. DeleteRPObjects(rp_id): zone + label + glow + edges
 10. DeleteAllObjects(): ObjectsDeleteAll(0, OBJECT_PREFIX)
 11. EnforceObjectLimit(): v3.0.1 batch delete — tính N upfront, 1 pass collect lowest, batch delete
@@ -829,7 +849,9 @@ Show_HTF_1=true, HTF_1=PERIOD_H4, Show_HTF_2=true, HTF_2=PERIOD_D1
 Use_Trend_Alignment=true
 
 // DISPLAY
-Zone_Width_Pips=4, Min_Score_To_Show=40, Show_Dashboard=true, Show_Performance_Stats=true
+Zone_Width_Pips=4, Min_Score_To_Show=40
+Show_Min_Level=RP_PREMIUM  // v3.2: dropdown PRE/LV1/LV2/LV3 — default chỉ hiện Premium
+Show_Dashboard=true, Show_Performance_Stats=true
 Proximity_Alert_Pips=20, Reset_Alert_Pips=30
 Dashboard_Corner=DASH_TOP_LEFT, Dashboard_Font_Size=9, Label_Font_Size=8
 
@@ -943,34 +965,36 @@ REASON_CHARTCHANGE/RECOMPILE/REMOVE → full reset
 === OnChartEvent === CHARTEVENT_CHART_CHANGE → RepositionDashboard + UpdateFontSizes
 === OnTimer === Flash toggle, decrement flash_count
 
-=== TF PRESET TABLE ===
-Param                    M30    H1    H4     D1
-Swing_Lookback            5      4     3      3
-Min_RP_Distance_Pips     25     20    20     40
-Min_Reaction_Move_Pips   12     15    20     40
-Initial_Bars_To_Scan    600    500   300    200
-Breakout_Confirm_Pips     3      5     8     15
-Max_Retest_Bars          40     50    40     30
-Decay_Interval_Bars      15     20    25     10
-Decay_Points/Interval     3      2     2      3
-Max_RP_Age_Bars         200    300   200    100
-SL_Buffer_Pips            3      5     8     15
-Entry_Buffer_Pips         1      2     3      5
-Max_Setup_Age_Bars        8     10    10      5
-Confluence_Merge_Pips     8     10    15     25
-HTF_Bars_To_Scan        200    200   150    100
-Fibo_Lookback_Bars       80    100   100     60
-Fibo_Tolerance_Pips       3      5     8     12
-Min_Candle_Size_Pips      2      3     5     10
-Zone_Width_Pips           3      4     6     10
-Min_Score_To_Show        50     40    40     35
-Proximity_Alert_Pips     15     20    30     50
-Reset_Alert_Pips         20     30    40     60
-Structure_Lookback       30     50    50     80
-HTF_1                    H1     H4    D1     W1
-HTF_2                    H4     D1    W1    MN1
+=== TF PRESET TABLE (v3.2: added M15) ===
+Param                    M15    M30    H1    H4     D1
+Swing_Lookback            7      5     4      3      3
+Min_RP_Distance_Pips     15     25    20     20     40
+Min_Reaction_Move_Pips   15     12    15     20     40
+Initial_Bars_To_Scan   1000    600   500    300    200
+Breakout_Confirm_Pips     2      3     5      8     15
+Max_Retest_Bars          50     40    50     40     30
+Decay_Interval_Bars      60     15    20     25     10
+Decay_Points/Interval     1      3     2      2      3
+Max_RP_Age_Bars         500    200   300    200    100
+SL_Buffer_Pips            2      3     5      8     15
+Entry_Buffer_Pips         1      1     2      3      5
+Max_Setup_Age_Bars       10      8    10     10      5
+Confluence_Merge_Pips    12      8    10     15     25
+HTF_Bars_To_Scan        200    200   200    150    100
+Fibo_Lookback_Bars      100     80   100    100     60
+Fibo_Tolerance_Pips       4      3     5      8     12
+Min_Candle_Size_Pips      3      2     3      5     10
+Zone_Width_Pips           3      3     4      6     10
+Min_Score_To_Show        55     50    40     40     35
+Proximity_Alert_Pips     12     15    20     30     50
+Reset_Alert_Pips         18     20    30     40     60
+Structure_Lookback       50     30    50     50     80
+HTF_1                    H1     H1    H4     D1     W1
+HTF_2                    H4     H4    D1     W1    MN1
 
-PRESET_AUTO: Period()<=M30→M30, <=H1→H1, <=H4→H4, else→D1
+ATR Baseline: M15=10p, M30=15p, H1=25p, H4=50p, D1=100p
+
+PRESET_AUTO: Period()<=M15→M15, <=M30→M30, <=H1→H1, <=H4→H4, else→D1
 ```
 
 ---
@@ -1007,7 +1031,7 @@ CalcFibonacciScore(price): scan legs, 618→10, 786→8, 500→7, 382→4.
    - g_is_cross_pair = not in [EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD,NZDUSD]
 
 2. ApplyVolatilityScaling(): gọi 1 LẦN khi first_run && g_cached_atr14>0
-   - ratio = ATR14 / baseline (M30=15p, H1=25p, H4=50p, D1=100p). Clamp [0.7, 2.5]
+   - ratio = ATR14 / baseline (M15=10p, M30=15p, H1=25p, H4=50p, D1=100p). Clamp [0.7, 2.5]
    - Scale: min_rp_dist, min_reaction, breakout_confirm, confluence_merge, fibo_tolerance,
      proximity_alert, reset_alert, sl_buffer, zone_width(min 3), min_candle_size(min 2)
    - Cross pairs: spread thresholds nới (alert≥2.5, block≥4.0)
@@ -1140,6 +1164,53 @@ OnInit: thêm `InitRPIDMap()` sau ArrayResize.
 |---|------|-----|
 | 17 | Session | Xóa `DrawSessionBackgrounds()` dead code |
 | 18 | Utils | Thêm `g_confluence_needs_redraw` flag |
+
+### v3.2.0 — Lower TF Accuracy + Zone Display Optimization
+
+#### Zone Display Optimization
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 1 | Drawing | **SuppressOverlappingZones()**: ATR×0.5 margin, giữ zone mạnh nhất (Premium ưu tiên) | **HIGH**: loại bỏ chồng chéo zone trên chart |
+| 2 | Drawing | g_rp_display_suppressed[] + g_prev_suppressed[] cho state change tracking | **HIGH**: zone tự phục hồi khi winner hết hạn |
+| 3 | Drawing | Confluence glow skip khi tất cả component RPs bị suppressed | **MEDIUM**: glow không hiện cho zone ẩn |
+| 4 | Drawing | Label di chuyển sang bên phải zone (+21 bars, ANCHOR_LEFT) | **LOW**: UI sạch hơn |
+| 5 | Drawing | Xóa "Tested:Nx" khỏi label → format: `PRE \| TYPE SCORE \| TF \| Status` | **LOW**: label ngắn gọn |
+| 6 | Drawing | Level icon: PREMIUM → "PRE" | **LOW**: compact |
+| 7 | Drawing | **Level filter**: input Show_Min_Level (default RP_PREMIUM), zones dưới level bị ẩn | **HIGH**: chỉ hiện zone uy tín |
+| 8 | Drawing | g_prev_types[] thêm ArrayInitialize(RP_SUPPORT) | **LOW**: tránh unnecessary redraw frame đầu |
+
+#### M15 Preset & Lower TF Accuracy
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 9 | Defines | Thêm PRESET_M15 vào ENUM_TF_PRESET | **HIGH**: M15 có bộ tham số riêng |
+| 10 | Main | PRESET_M15: swing=7, reaction=15, decay_interval=60, max_age=500, candle_min=3 | **HIGH**: lọc noise M15 |
+| 11 | Main | PRESET_AUTO: Period()<=M15 → PRESET_M15 (trước đây map sang M30) | **HIGH**: auto-detect đúng |
+| 12 | Utils | ATR baseline M15=10 pips (tách khỏi M30=15) | **MEDIUM**: volatility scaling chính xác |
+
+#### Zone Creation Hardening (M15/M30)
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 13 | Detection | **Session gate**: reject zone formed during SESSION_DEAD trên M15/M30 | **HIGH**: loại ~70% false zones |
+| 14 | Detection | **Adaptive reaction floor**: min reaction = max(preset, 0.6×ATR) trên M15/M30 | **HIGH**: chặn sub-5-pip reactions |
+| 15 | Detection | **Wick filter TF-adaptive**: M15/M30 threshold 50%/25% (vs H1+ 60%/30%) | **MEDIUM**: zone chính xác hơn |
+| 16 | Detection | Xóa variable shadowing: `tf` → reuse `tf_cur` trong ATR width cap | **LOW**: code quality |
+
+#### HTF Nesting Bonus (Multi-TF Top-Down)
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 17 | Confluence | **CalcHTFNestingBonus()**: [0, +30] — reward zones confirmed by HTF zones | **HIGH**: H4→H1→M15 workflow |
+| 18 | Scoring | Tích hợp CalcHTFNestingBonus vào CalcFinalScore | **HIGH**: zone M15 có HTF confirm lên Premium |
+
+HTF Nesting Bonus chi tiết:
+- HTF1 only (e.g. H1 confirms M15): +12
+- HTF2 only (e.g. H4 confirms M15): +20
+- Both HTF1+HTF2 (full chain): +30
+- Requires same type match (support↔support, resistance↔resistance)
+- ATR-based margin: HTF1 within 1.0×ATR, HTF2 within 1.5×ATR
 
 ---
 
