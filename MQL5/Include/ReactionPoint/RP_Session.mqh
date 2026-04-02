@@ -149,50 +149,6 @@ color GetSessionRawColor(ENUM_SESSION sess)
    return clrGainsboro;
 }
 
-void DrawSessionBackgrounds(int visible_bars)
-{
-   if(!g_show_session_background) return;
-
-   // Delete old session backgrounds
-   ObjectsDeleteAll(0, OBJECT_PREFIX + "SESS_");
-
-   color bg = GetChartBackground();
-   ENUM_SESSION prev_session = SESSION_DEAD;
-   datetime sess_start = 0;
-   int obj_idx = 0;
-
-   for(int i = visible_bars; i >= 0; i--)
-   {
-      datetime bar_time = iTime(_Symbol, PERIOD_CURRENT, i);
-      if(bar_time == 0) continue;
-      ENUM_SESSION sess = GetSessionForTime(bar_time);
-
-      if(sess != prev_session || i == 0)
-      {
-         // Close previous session block
-         if(sess_start > 0 && prev_session != SESSION_DEAD)
-         {
-            string name = OBJECT_PREFIX + "SESS_" + IntegerToString(obj_idx++);
-            datetime end_time = iTime(_Symbol, PERIOD_CURRENT, (i == 0) ? 0 : i + 1);
-
-            double chart_high = ChartGetDouble(0, CHART_PRICE_MAX);
-            double chart_low  = ChartGetDouble(0, CHART_PRICE_MIN);
-
-            if(ObjectCreate(0, name, OBJ_RECTANGLE, 0, sess_start, chart_high, end_time, chart_low))
-            {
-               color raw_clr = GetSessionRawColor(prev_session);
-               color blended = BlendColor(raw_clr, bg, 10); // ~10% opacity
-               ObjectSetInteger(0, name, OBJPROP_COLOR, blended);
-               ObjectSetInteger(0, name, OBJPROP_FILL, true);
-               ObjectSetInteger(0, name, OBJPROP_BACK, true);
-               ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-               ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-            }
-         }
-         sess_start = bar_time;
-         prev_session = sess;
-      }
-   }
-}
+// DrawSessionBackgrounds removed — replaced by CreateSessionObjects() + UpdateSessionVisibility() in RP_Drawing.mqh
 
 #endif // RP_SESSION_MQH

@@ -105,9 +105,10 @@ bool CheckMomentumConfirmation(int swing_bar, ENUM_RP_TYPE rp_type, double &reac
 
    if(swing_price == 0.0) return false;
 
-   // Scan closed bars after swing for max move away
+   // Scan closed bars after swing for max move away (limited to 50 bars)
    double max_move = 0.0;
-   for(int i = swing_bar - 1; i >= 1; i--)
+   int scan_limit = MathMax(swing_bar - 50, 1);
+   for(int i = swing_bar - 1; i >= scan_limit; i--)
    {
       double close_i = RP_Close(i);
       if(close_i == 0.0) continue;
@@ -519,6 +520,12 @@ void HandleBreakout(int rp_index, int current_bar)
 
    rp.bar_last_tested  = current_bar;
    rp.time_last_tested = TimeCurrent();
+   rp.is_fresh         = false;
+
+   //--- Deactivate broken RP if not in confluence (confluence zones get role-reversal chance)
+   if(!rp.is_confluence)
+      rp.is_active = false;
+
    g_rp_array[rp_index] = rp;
    g_rp_dirty[rp_index] = true;
 }
@@ -533,8 +540,11 @@ void CheckRoleReversalRetest(int rp_index, int current_bar,
    if(rp.is_role_reversed) return;
 
    // Check if price was beyond the RP within retest window (breakout occurred)
+   // Only scan bars between now and RP formation (not before RP existed)
    bool was_broken = false;
-   int max_bars = MathMin(g_max_retest_bars, current_bar - 1);
+   int rp_current_shift = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
+   int max_bars = MathMin(g_max_retest_bars, rp_current_shift - 1);
+   if(max_bars < 2) return;
 
    if(rp.rp_type == RP_SUPPORT)
    {
@@ -746,8 +756,14 @@ void CheckBreakoutsAndRetests()
          }
       }
 
+      // Skip further checks if RP was deactivated by breakout above
+      if(!g_rp_array[i].is_active) continue;
+
       // Check gap breakout (price passes zone without touching)
       CheckGapBreakout(i, close_1);
+
+      // Skip role reversal if RP was deactivated by gap breakout
+      if(!g_rp_array[i].is_active) continue;
 
       // Check role reversal retest
       CheckRoleReversalRetest(i, current_bar, close_1, high_1, low_1);

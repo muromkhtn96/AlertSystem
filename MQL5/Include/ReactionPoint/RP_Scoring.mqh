@@ -42,14 +42,13 @@ double CalcFibonacciScore(double price)
       else if(MathAbs(price - g_fibo_legs[i].fibo_382) <= tolerance)
          score = 4.0;
 
-      //--- Fibo confluence: ONE-TIME +3 bonus when RP aligns with 2+ legs
-      if(score > 0.0 && found_in_another_leg && !confluence_bonus_paid)
-      {
-         score += 3.0;
-         confluence_bonus_paid = true;
-      }
       if(score > 0.0)
+      {
+         //--- Track multi-leg confluence (bonus applied AFTER loop)
+         if(found_in_another_leg)
+            confluence_bonus_paid = true;
          found_in_another_leg = true;
+      }
 
       if(score > best_score)
          best_score = score;
@@ -66,6 +65,10 @@ double CalcFibonacciScore(double price)
          if(MathAbs(price - g_cached_fibo_382) <= tolerance) return 4.0;
       }
    }
+
+   //--- Apply multi-leg bonus to best_score (not to individual leg score)
+   if(confluence_bonus_paid && best_score > 0.0)
+      best_score += 3.0;
 
    return MathMin(best_score, 13.0); // Cap: 10 base + 3 one-time confluence bonus
 }
@@ -144,20 +147,40 @@ double CalcPatternDirectionScore(int rp_index)
    }
 
    // Determine candle direction at the swing bar
-   double open_f  = iOpen(_Symbol, PERIOD_CURRENT, rp.bar_formed);
-   double close_f = iClose(_Symbol, PERIOD_CURRENT, rp.bar_formed);
+   // Use iBarShift to get current bar index (bar_formed drifts as new bars form)
+   int current_shift = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
+   if(current_shift < RP_SHIFT_MIN) return base_val * 0.5;
+
+   double open_f  = iOpen(_Symbol, PERIOD_CURRENT, current_shift);
+   double close_f = iClose(_Symbol, PERIOD_CURRENT, current_shift);
    if(open_f == 0.0 || close_f == 0.0) return base_val * 0.5;  // Unknown → neutral
+
+   double high_f  = iHigh(_Symbol, PERIOD_CURRENT, current_shift);
+   double low_f   = iLow(_Symbol, PERIOD_CURRENT, current_shift);
+   double range_f = high_f - low_f;
 
    bool is_bullish_candle = (close_f > open_f);
 
    // Determine pattern-zone alignment
-   // Support zone wants bullish reaction (rejection up)
-   // Resistance zone wants bearish reaction (rejection down)
+   // For Pinbar: use WICK direction (not body) — long lower wick at support = bullish rejection
+   // For other patterns: use body direction as before
    bool is_aligned = false;
-   if(rp.rp_type == RP_SUPPORT)
-      is_aligned = is_bullish_candle;
+   if(rp.candle_pattern == PATTERN_PINBAR && range_f > 0.0)
+   {
+      double lower_wick = MathMin(open_f, close_f) - low_f;
+      double upper_wick = high_f - MathMax(open_f, close_f);
+      if(rp.rp_type == RP_SUPPORT)
+         is_aligned = (lower_wick >= range_f * 0.50);   // Long lower wick = demand rejection
+      else
+         is_aligned = (upper_wick >= range_f * 0.50);   // Long upper wick = supply rejection
+   }
    else
-      is_aligned = !is_bullish_candle;
+   {
+      if(rp.rp_type == RP_SUPPORT)
+         is_aligned = is_bullish_candle;
+      else
+         is_aligned = !is_bullish_candle;
+   }
 
    // Outside Bar is direction-neutral — always gets 75% score
    if(rp.candle_pattern == PATTERN_OUTSIDE_BAR)
@@ -175,8 +198,12 @@ double CalcVolumeDeltaBonus(int rp_index)
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
    SReactionPoint rp = g_rp_array[rp_index];
 
-   double open_f  = iOpen(_Symbol, PERIOD_CURRENT, rp.bar_formed);
-   double close_f = iClose(_Symbol, PERIOD_CURRENT, rp.bar_formed);
+   // Use iBarShift to get current bar index (bar_formed drifts as new bars form)
+   int delta_shift = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
+   if(delta_shift < RP_SHIFT_MIN) return 0.0;
+
+   double open_f  = iOpen(_Symbol, PERIOD_CURRENT, delta_shift);
+   double close_f = iClose(_Symbol, PERIOD_CURRENT, delta_shift);
    if(open_f == 0.0 || close_f == 0.0) return 0.0;
 
    bool is_buying = (close_f > open_f);
@@ -203,15 +230,16 @@ double RoundNumberScore(double price)
    double remainder_100 = MathMod(price_in_pips, 100.0);
    double remainder_50  = MathMod(price_in_pips, 50.0);
 
-   // Distance to nearest 100-pip level
+   // Distance to nearest 100-pip level (major: x.x000)
    double dist_100 = MathMin(remainder_100, 100.0 - remainder_100);
-   // Distance to nearest 50-pip level
+   // Distance to nearest 50-pip level (minor: x.x500)
    double dist_50  = MathMin(remainder_50, 50.0 - remainder_50);
 
-   double min_dist = MathMin(dist_100, dist_50);
-
-   if(min_dist <= 10.0) return 8.0;
-   if(min_dist <= 20.0) return 4.0;
+   // Major round numbers (000) score higher than minor (500)
+   if(dist_100 <= 10.0) return 8.0;   // Near x.x000 → full score
+   if(dist_100 <= 20.0) return 5.0;   // Close to x.x000
+   if(dist_50 <= 10.0)  return 5.0;   // Near x.x500 → moderate score
+   if(dist_50 <= 20.0)  return 3.0;   // Close to x.x500
    return 0.0;
 }
 
@@ -381,7 +409,10 @@ double CalcBaseScore(int rp_index)
    score += CalcFibonacciScore(rp.price);
 
    // 5. Volume (max 15) — P27c: session-normalized volume scoring
-   score += CalcVolumeScore(rp.bar_formed, rp.session_formed);
+   //    Use iBarShift to get current bar index (bar_formed drifts as new bars form)
+   int vol_shift = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
+   if(vol_shift > 0)
+      score += CalcVolumeScore(vol_shift, rp.session_formed);
 
    // 6. Round Number (max 8)
    score += RoundNumberScore(rp.price);

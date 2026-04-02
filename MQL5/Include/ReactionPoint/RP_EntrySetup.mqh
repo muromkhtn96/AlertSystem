@@ -251,18 +251,12 @@ void CreateEntrySetup(int rp_index)
             slot = i;
             break;
          }
-         //--- Find RP score for this setup
-         for(int r = 0; r < g_rp_count; r++)
+         //--- Find RP score for this setup (O(1) lookup)
+         int r = FindRPIndexByID(g_setup_array[i].rp_id);
+         if(r >= 0 && g_rp_array[r].final_score < lowest)
          {
-            if(g_rp_array[r].id == g_setup_array[i].rp_id)
-            {
-               if(g_rp_array[r].final_score < lowest)
-               {
-                  lowest = g_rp_array[r].final_score;
-                  lowest_idx = i;
-               }
-               break;
-            }
+            lowest = g_rp_array[r].final_score;
+            lowest_idx = i;
          }
       }
       if(slot < 0) slot = lowest_idx;
@@ -312,14 +306,9 @@ void CreateEntrySetup(int rp_index)
          //--- Same direction → tag PREFERRED for higher-score setup
          double score_new = rp.final_score;
          double score_old = 0.0;
-         for(int r = 0; r < g_rp_count; r++)
-         {
-            if(g_rp_array[r].id == g_setup_array[i].rp_id)
-            {
-               score_old = g_rp_array[r].final_score;
-               break;
-            }
-         }
+         int r_old = FindRPIndexByID(g_setup_array[i].rp_id);
+         if(r_old >= 0)
+            score_old = g_rp_array[r_old].final_score;
 
          if(score_new >= score_old)
          {

@@ -478,10 +478,6 @@ void UpdateSessionVisibility()
 {
    if(!g_show_session_background) return;
 
-   //--- Get chart visible range
-   datetime vis_start = (datetime)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
-   int visible_bars   = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-
    //--- Get chart price range for vertical extent
    double chart_high = ChartGetDouble(0, CHART_PRICE_MAX);
    double chart_low  = ChartGetDouble(0, CHART_PRICE_MIN);
@@ -611,11 +607,12 @@ void RedrawChangedRP()
       g_prev_opacity[i]  = rp.display_opacity;
    }
 
-   //--- Redraw confluence glows (skip in clean mode)
-   if(!g_clean_chart_mode)
+   //--- Redraw confluence glows only when confluence zones changed (skip in clean mode)
+   if(!g_clean_chart_mode && g_confluence_needs_redraw)
    {
       for(int z = 0; z < g_confluence_count; z++)
          DrawConfluenceGlow(z);
+      g_confluence_needs_redraw = false;
    }
 
    // P28: Entry setup panels removed — clean chart, zones only

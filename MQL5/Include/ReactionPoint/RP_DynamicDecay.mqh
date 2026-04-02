@@ -23,14 +23,14 @@ double CalcDecayPenalty(int rp_index)
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
 
    SReactionPoint rp = g_rp_array[rp_index];
-   int current_bar = Bars(_Symbol, PERIOD_CURRENT) - 1;
 
-   int bars_since_formed = current_bar - rp.bar_formed;
+   //--- Use iBarShift for accurate age (bar_formed index drifts over time)
+   int bars_since_formed = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
    if(bars_since_formed < 0) bars_since_formed = 0;
 
    // Use last event (tested or formed)
-   int last_event_bar = (rp.bar_last_tested > 0) ? rp.bar_last_tested : rp.bar_formed;
-   int bars_since_event = current_bar - last_event_bar;
+   datetime last_event_time = (rp.time_last_tested > 0) ? rp.time_last_tested : rp.time_formed;
+   int bars_since_event = iBarShift(_Symbol, PERIOD_CURRENT, last_event_time);
    if(bars_since_event < 0) bars_since_event = 0;
 
    // Base decay penalty
@@ -144,7 +144,8 @@ void UpdateAllDecay()
    {
       if(!g_rp_array[i].is_active) continue;
 
-      int bars_since = current_bar - g_rp_array[i].bar_formed;
+      //--- Use iBarShift for accurate age calculation (bar_formed drifts)
+      int bars_since = iBarShift(_Symbol, PERIOD_CURRENT, g_rp_array[i].time_formed);
       if(bars_since < 0) bars_since = 0;
 
       // Initial opacity based on RP level

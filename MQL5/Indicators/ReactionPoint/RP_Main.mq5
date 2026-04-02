@@ -626,6 +626,7 @@ int OnCalculate(const int rates_total,
          MergeClusterZones();
          ApplyConfluenceScoring();
          g_confluence_needs_update = false;
+         g_confluence_needs_redraw = true;
       }
    }
 
@@ -755,6 +756,8 @@ void OnTimer()
       }
    }
 
-   ChartRedraw(0);
+   //--- Only redraw chart when there are actually flashing zones
+   if(flashing_count > 0)
+      ChartRedraw(0);
 }
 //+------------------------------------------------------------------+
