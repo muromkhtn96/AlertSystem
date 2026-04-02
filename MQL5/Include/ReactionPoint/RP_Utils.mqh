@@ -198,6 +198,7 @@ int    g_htf2_cached_swing_count = 0;
 
 // Confluence update flag
 bool   g_confluence_needs_update = false;
+bool   g_confluence_needs_redraw = false;
 
 // Alert throttle
 double g_last_alert_check_price = 0.0;
@@ -241,6 +242,10 @@ double RP_Low(int shift)
 //+------------------------------------------------------------------+
 double PipValue()
 {
+   //--- Cache pip value: symbol digits/point never change during session
+   static double s_cached_pip = 0.0;
+   if(s_cached_pip > 0.0) return s_cached_pip;
+
    double pip_val;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -253,6 +258,7 @@ double PipValue()
    if(pip_val <= 0.0)
       pip_val = (point > 0.0) ? point : 0.0001;
 
+   s_cached_pip = pip_val;
    return pip_val;
 }
 
@@ -570,12 +576,27 @@ bool IsNewBarHTF(ENUM_TIMEFRAMES tf)
 
    if(!initialized)
    {
-      ArrayResize(htf_times, 30);
+      ArrayResize(htf_times, 16);
       ArrayInitialize(htf_times, 0);
       initialized = true;
    }
 
-   int idx = (int)tf % 30;
+   //--- Map ENUM_TIMEFRAMES to unique slot (avoids hash collisions like M5/H1)
+   int idx;
+   switch(tf)
+   {
+      case PERIOD_M1:   idx = 0;  break;
+      case PERIOD_M5:   idx = 1;  break;
+      case PERIOD_M15:  idx = 2;  break;
+      case PERIOD_M30:  idx = 3;  break;
+      case PERIOD_H1:   idx = 4;  break;
+      case PERIOD_H4:   idx = 5;  break;
+      case PERIOD_D1:   idx = 6;  break;
+      case PERIOD_W1:   idx = 7;  break;
+      case PERIOD_MN1:  idx = 8;  break;
+      default:          idx = 9 + ((int)tf % 6); break;
+   }
+
    datetime cur_time = iTime(_Symbol, tf, 0);
 
    if(cur_time != htf_times[idx])
@@ -878,6 +899,30 @@ void SetRPIDMap(int rp_id, int array_index)
 {
    if(rp_id >= 0 && rp_id < MAX_RP_ID_MAP)
       g_rp_id_to_index[rp_id] = array_index;
+   else if(rp_id >= MAX_RP_ID_MAP)
+   {
+      //--- ID overflow: rebuild map with modular IDs
+      //    Reset g_next_rp_id and reassign all active RPs
+      g_next_rp_id = 0;
+      ArrayInitialize(g_rp_id_to_index, -1);
+      for(int i = 0; i < g_rp_count; i++)
+      {
+         if(g_rp_array[i].is_active)
+         {
+            g_rp_array[i].id = g_next_rp_id;
+            g_rp_id_to_index[g_next_rp_id] = i;
+            g_next_rp_id++;
+         }
+      }
+      //--- Assign new ID for current RP
+      if(g_next_rp_id < MAX_RP_ID_MAP && array_index >= 0 && array_index < g_rp_count)
+      {
+         g_rp_array[array_index].id = g_next_rp_id;
+         g_rp_id_to_index[g_next_rp_id] = array_index;
+         g_next_rp_id++;
+      }
+      Print("RP: ID overflow — reassigned ", g_next_rp_id, " IDs");
+   }
 }
 
 //+------------------------------------------------------------------+

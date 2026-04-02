@@ -1106,6 +1106,41 @@ OnInit: thêm `InitRPIDMap()` sau ArrayResize.
 | 8 | Dashboard | SafeUnicode(code, fallback) cho VPS/Wine (8 vị trí + DashSep) |
 | 9 | Drawing | Label collision: g_label_placed_prices[], AdjustLabelPrice(), nudge max 3 lần |
 
+### v3.1.0 — Accuracy & Performance Review (16 fixes)
+
+#### Accuracy Fixes (ảnh hưởng chất lượng tín hiệu)
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 1 | Scoring | `bar_formed` drift → dùng `iBarShift(time_formed)` cho Volume, Pattern, VolumeDelta | **CRITICAL**: score tính từ bar sai khi RP tồn tại lâu |
+| 2 | Scoring | Pinbar alignment dùng wick direction thay vì body direction | **HIGH**: pinbar hợp lệ bị mất 70% score |
+| 3 | Scoring | Fibo confluence bonus +3 apply vào `best_score` sau loop thay vì trong loop | **MEDIUM**: bonus bị mất nếu leg ordering không đúng |
+| 4 | Scoring | Round number phân biệt major (000, +8) vs minor (500, +5) | **LOW**: cải thiện phân loại |
+| 5 | Alerts | Re-read RP SAU `ResetAlertIfDistant()` (stale local copy) | **HIGH**: alert không fire lại sau reset |
+| 6 | Utils | `IsNewBarHTF` dùng switch-case mapping thay vì `%30` (M5/H1 collision) | **CRITICAL**: HTF confluence không cập nhật trên M5+H1 |
+| 7 | Detection | `HandleBreakout` deactivate RP bị phá (trừ confluence zones) | **MEDIUM**: broken zones tiếp tục tạo signals |
+| 8 | Detection | Momentum scan giới hạn 50 bars thay vì scan toàn bộ | **MEDIUM**: giảm noise RPs từ swings cũ |
+| 9 | Detection | Role reversal scan chỉ bars SAU RP formation (`iBarShift`) | **MEDIUM**: tránh false role reversal |
+| 10 | DynamicDecay | `CalcDecayPenalty` + `UpdateAllDecay` dùng `iBarShift(time_formed)` | **HIGH**: decay age tính sai do bar_formed drift |
+
+#### Performance Fixes (tối ưu CPU/rendering)
+
+| # | File | Fix | Impact |
+|---|------|-----|--------|
+| 11 | Main | `ChartRedraw(0)` chỉ gọi khi `flashing_count > 0` | **HIGH**: tiết kiệm full repaint mỗi giây |
+| 12 | Drawing | Confluence glow chỉ redraw khi `g_confluence_needs_redraw` | **MEDIUM**: tránh vẽ lại mỗi bar |
+| 13 | Drawing | Xóa unused `vis_start`/`visible_bars` trong `UpdateSessionVisibility` | **LOW**: dead code |
+| 14 | Utils | `PipValue()` cache static (digits/point không đổi trong session) | **MEDIUM**: giảm hàng chục SymbolInfo calls/tick |
+| 15 | Utils | `SetRPIDMap` xử lý ID overflow: reassign IDs khi `>= MAX_RP_ID_MAP` | **MEDIUM**: tránh O(1)→O(N) degradation |
+| 16 | EntrySetup | Thay linear scan bằng `FindRPIndexByID()` (2 vị trí) | **LOW**: O(N²)→O(1) |
+
+#### Code Cleanup
+
+| # | File | Fix |
+|---|------|-----|
+| 17 | Session | Xóa `DrawSessionBackgrounds()` dead code |
+| 18 | Utils | Thêm `g_confluence_needs_redraw` flag |
+
 ---
 
 ## THỨ TỰ THỰC THI

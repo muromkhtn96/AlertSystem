@@ -193,10 +193,11 @@ void CheckAllAlerts()
    {
       if(!g_rp_array[i].is_active) continue;
 
-      SReactionPoint rp = g_rp_array[i];
-
       //--- Reset alerts if price moved far away
       ResetAlertIfDistant(i);
+
+      //--- Re-read RP AFTER reset (ResetAlertIfDistant may have cleared alert_sent)
+      SReactionPoint rp = g_rp_array[i];
 
       //--- Early exit: all alerts already sent for this RP
       if(rp.alert_sent[0] && rp.alert_sent[1] &&
