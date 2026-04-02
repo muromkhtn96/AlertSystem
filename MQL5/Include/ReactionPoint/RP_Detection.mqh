@@ -280,6 +280,22 @@ int EvictRP()
 void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
               ENUM_CANDLE_PATTERN pattern, double reaction_pips)
 {
+   //--- Session gate: reject zones formed during dead session on M15/M30
+   //    Dead session zones have very low reliability on lower TFs
+   ENUM_TIMEFRAMES tf_cur = Period();
+   if(tf_cur <= PERIOD_M30 && g_current_session == SESSION_DEAD)
+      return;
+
+   //--- Adaptive reaction floor: enforce minimum based on ATR
+   //    Prevents sub-5-pip zones on calm M15/M30 days
+   if(tf_cur <= PERIOD_M30)
+   {
+      double atr_floor = g_cached_atr14 > 0.0 ? PriceToPips(g_cached_atr14) * 0.6 : 10.0;
+      double min_floor = MathMax((double)g_min_reaction_move_pips, atr_floor);
+      if(reaction_pips < min_floor)
+         return;
+   }
+
    // Check distance from existing RPs
    for(int i = 0; i < g_rp_count; i++)
    {
@@ -361,16 +377,21 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
       double body_bottom = MathMin(bar_open, bar_close);
       double upper_wick  = bar_high - body_top;
       double lower_wick  = body_bottom - bar_low;
-      double trim_width  = bar_range * 0.30;  // zone = 30% of candle range
 
-      if(rp_type == RP_SUPPORT && lower_wick >= bar_range * 0.60)
+      //--- M15/M30: stricter wick filter (50%) — more noise requires tighter zones
+      //--- H1+: standard threshold (60%)
+      double wick_threshold = (tf_cur <= PERIOD_M30) ? 0.50 : 0.60;
+      double trim_ratio     = (tf_cur <= PERIOD_M30) ? 0.25 : 0.30;
+      double trim_width     = bar_range * trim_ratio;
+
+      if(rp_type == RP_SUPPORT && lower_wick >= bar_range * wick_threshold)
       {
          // Long lower wick: liquidity grab at bottom → zone hugs the wick tip area
          rp.zone_low  = bar_low;
          rp.zone_high = bar_low + trim_width;
          rp.has_wick_filter = true;
       }
-      else if(rp_type == RP_RESISTANCE && upper_wick >= bar_range * 0.60)
+      else if(rp_type == RP_RESISTANCE && upper_wick >= bar_range * wick_threshold)
       {
          // Long upper wick: liquidity grab at top → zone hugs the wick tip area
          rp.zone_high = bar_high;
@@ -382,10 +403,9 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    //--- P24b: ATR-Adaptive Width Cap by timeframe
    double min_width  = PipsToPrice(g_zone_width_pips / 2.0);
    double atr_multiplier = 1.0;
-   ENUM_TIMEFRAMES tf = Period();
-   if(tf <= PERIOD_M15)
+   if(tf_cur <= PERIOD_M15)
       atr_multiplier = 0.5;
-   else if(tf <= PERIOD_H4)
+   else if(tf_cur <= PERIOD_H4)
       atr_multiplier = 0.7;
    else
       atr_multiplier = 1.0;

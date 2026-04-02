@@ -447,6 +447,7 @@ void CalcFinalScore(int rp_index)
       + GetStructureScoreAdj(rp_index)                 // Module H: [-20, +15]
       + GetLiquiditySweepBonus(rp_index)               // Module H: [0, +20]
       + GetTrendAlignmentScore(rp.rp_type)             // Multi-TF: [-25, +20] (P20)
+      + CalcHTFNestingBonus(rp_index)                  // HTF nesting: [0, +30]
       + CalcAbsorptionAdj(rp_index)                    // P25b: [-10, +5]
       + (rp.is_role_reversed ? 15.0 : 0.0)            // Role reversal bonus
       + ((rp.is_fresh && rp.test_count == 0) ? 10.0 : 0.0); // First touch bonus

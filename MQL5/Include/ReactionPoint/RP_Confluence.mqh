@@ -689,4 +689,52 @@ bool IsTrendAligned(ENUM_RP_TYPE rp_type)
    return GetTrendAlignmentScore(rp_type) >= 0.0;
 }
 
+//+------------------------------------------------------------------+
+//| CalcHTFNestingBonus — reward zones confirmed by higher TF zones   |
+//| H4→H1→M15 top-down: zone nesting = institutional confirmation    |
+//| Returns [0, +30] based on HTF nesting depth and type match        |
+//+------------------------------------------------------------------+
+double CalcHTFNestingBonus(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   if(g_htf_swing_count <= 0) return 0.0;
+
+   SReactionPoint rp = g_rp_array[rp_index];
+   double zone_mid = (rp.zone_high + rp.zone_low) / 2.0;
+
+   //--- Nesting margin: zone center must be within HTF swing ± nesting_range
+   //    Use ATR-based range for each HTF level
+   double atr = g_cached_atr14;
+   if(atr <= 0.0) atr = PipsToPrice(20);
+
+   bool htf1_confirmed = false;  // e.g. H1 confirms M15, or H4 confirms H1
+   bool htf2_confirmed = false;  // e.g. H4 confirms M15, or D1 confirms H1
+
+   for(int i = 0; i < g_htf_swing_count; i++)
+   {
+      //--- Same type check: support nests in support, resistance in resistance
+      if(g_htf_swing_cache[i].rp_type != rp.rp_type) continue;
+
+      double dist = MathAbs(g_htf_swing_cache[i].price - zone_mid);
+
+      //--- HTF1 nesting (closer TF): within 1.0×ATR
+      if(g_htf_swing_cache[i].source_tf == g_htf_1 && dist <= atr * 1.0)
+         htf1_confirmed = true;
+
+      //--- HTF2 nesting (higher TF): within 1.5×ATR (wider margin for bigger TF)
+      if(g_htf_swing_cache[i].source_tf == g_htf_2 && dist <= atr * 1.5)
+         htf2_confirmed = true;
+   }
+
+   //--- Scoring: multi-tier confirmation
+   if(htf1_confirmed && htf2_confirmed)
+      return 30.0;   // Full chain: e.g. M15 zone confirmed by H1 + H4
+   else if(htf2_confirmed)
+      return 20.0;   // Higher TF only: strong structural confirmation
+   else if(htf1_confirmed)
+      return 12.0;   // Closer HTF only: moderate confirmation
+   else
+      return 0.0;    // No HTF nesting
+}
+
 #endif // RP_CONFLUENCE_MQH
