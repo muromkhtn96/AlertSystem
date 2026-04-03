@@ -263,9 +263,9 @@ double CalcZonePrecisionScore(int rp_index)
 
    double score = 0.0;
    double zone_width = rp.zone_high - rp.zone_low;
-   if(zone_width <= 0.0 || g_cached_atr14 <= 0.0) return 0.0;
+   if(zone_width <= 0.0 || g_cached_atr14_smooth <= 0.0) return 0.0;
 
-   double width_ratio = zone_width / g_cached_atr14;
+   double width_ratio = zone_width / g_cached_atr14_smooth;
 
    // 1. Width precision — linear gradient instead of step function
    if(width_ratio <= 0.15)
@@ -398,8 +398,8 @@ double CalcBaseScore(int rp_index)
    double score = 0.0;
 
    // 1. Reaction Strength (max 35) — primary factor, institutional interest
-   //    Use g_cached_atr14 — do NOT call SafeATR() again
-   double atr_pips = PriceToPips(g_cached_atr14);
+   //    Use smoothed ATR to prevent spike-induced score instability
+   double atr_pips = PriceToPips(g_cached_atr14_smooth);
    if(atr_pips < 0.1) atr_pips = 10.0; // Guard div by zero
    score += MathMin((rp.initial_reaction_pips / atr_pips) * 35.0, 35.0);
 

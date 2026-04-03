@@ -167,6 +167,7 @@ color  g_color_resistance    = C'210,100,100';   // Coral — resistance zones
 //| Global Variables — Performance Cache                             |
 //+------------------------------------------------------------------+
 double g_cached_atr14         = 0.0;
+double g_cached_atr14_smooth  = 0.0;  // EMA-smoothed ATR14 for scoring (spike-resistant)
 double g_cached_atr14_ma50    = 0.0;
 double g_cached_volume_ma20   = 0.0;
 int    g_cached_bar_index     = -1;
@@ -523,6 +524,17 @@ void UpdateBarCache()
    g_cached_atr14 = CalcATR(14, 1);
    if(g_cached_atr14 <= 0.0 || g_cached_atr14 != g_cached_atr14)
       g_cached_atr14 = PipsToPrice(10);
+
+   //--- ATR14 smoothed (EMA, period=10) — spike-resistant for scoring
+   //    EMA formula: smooth = alpha * raw + (1-alpha) * prev_smooth
+   //    alpha = 2/(period+1) = 2/11 ≈ 0.1818
+   {
+      static const double ema_alpha = 2.0 / 11.0;  // EMA period 10
+      if(g_cached_atr14_smooth <= 0.0)
+         g_cached_atr14_smooth = g_cached_atr14;    // Seed with first value
+      else
+         g_cached_atr14_smooth = ema_alpha * g_cached_atr14 + (1.0 - ema_alpha) * g_cached_atr14_smooth;
+   }
 
    //--- ATR MA50 rolling buffer
    static double atr_buf[50];
