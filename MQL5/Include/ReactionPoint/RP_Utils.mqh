@@ -708,8 +708,8 @@ color GetSpreadColor(double current, double average)
 //+------------------------------------------------------------------+
 ENUM_RP_LEVEL ClassifyRPLevel(double score)
 {
-   if(score >= 110.0) return RP_PREMIUM;
-   if(score >= 80.0)  return RP_LEVEL1;
+   if(score >= 120.0) return RP_PREMIUM;   // Was 110 — raised for better differentiation with cap 200
+   if(score >= 85.0)  return RP_LEVEL1;    // Was 80
    if(score >= 60.0)  return RP_LEVEL2;
    if(score >= 40.0)  return RP_LEVEL3;
    return RP_HIDDEN;

@@ -32,7 +32,7 @@ enum ENUM_STRUCTURE_STATE   { STRUCTURE_BULLISH, STRUCTURE_BEARISH, STRUCTURE_NO
 #define MAX_FLASH_RP       3
 #define MAX_HTF_RETRIES    3
 #define OBJECT_PREFIX      "RP_"
-#define SCORE_CAP          150.0
+#define SCORE_CAP          200.0
 #define MAX_FIBO_LEGS      3
 #define MAX_FIBO_SWINGS    6
 
