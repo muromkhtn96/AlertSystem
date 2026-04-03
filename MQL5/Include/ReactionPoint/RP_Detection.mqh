@@ -452,6 +452,35 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    rp.zone_high_original   = rp.zone_high;
    rp.zone_low_original    = rp.zone_low;
 
+   //--- P36: Imbalance candle detection — scan zone_bar ±1
+   //    Imbalance = body >= 70% range AND volume > 1.5× MA20
+   //    Indicates institutional urgency at zone formation
+   rp.has_imbalance = false;
+   int imb_start = MathMax(zone_bar - 1, RP_SHIFT_MIN);
+   int imb_end   = MathMin(zone_bar + 1, available_bars - 1);
+   for(int imb = imb_start; imb <= imb_end; imb++)
+   {
+      double imb_o = iOpen(_Symbol, PERIOD_CURRENT, imb);
+      double imb_c = iClose(_Symbol, PERIOD_CURRENT, imb);
+      double imb_h = iHigh(_Symbol, PERIOD_CURRENT, imb);
+      double imb_l = iLow(_Symbol, PERIOD_CURRENT, imb);
+      if(imb_h <= imb_l || imb_o == 0.0) continue;
+
+      double imb_range = imb_h - imb_l;
+      double imb_body  = MathAbs(imb_o - imb_c);
+
+      // Body >= 70% range = strong directional candle
+      if(imb_body < imb_range * 0.70) continue;
+
+      // Volume > 1.5× MA20 = institutional participation
+      long imb_vol = iVolume(_Symbol, PERIOD_CURRENT, imb);
+      if(g_cached_volume_ma20 > 0.0 && (double)imb_vol > g_cached_volume_ma20 * 1.5)
+      {
+         rp.has_imbalance = true;
+         break;
+      }
+   }
+
    rp.time_formed          = iTime(_Symbol, PERIOD_CURRENT, bar_index);
    rp.bar_formed           = bar_index;
    rp.source_tf            = Period();

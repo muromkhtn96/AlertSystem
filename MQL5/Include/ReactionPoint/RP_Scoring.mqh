@@ -429,6 +429,10 @@ double CalcBaseScore(int rp_index)
    // 7. Zone Precision (P24d): [-5, +13] — reward tight/refined zones
    score += CalcZonePrecisionScore(rp_index);
 
+   // 8. Imbalance candle (P36): +8 — institutional urgency at zone formation
+   if(rp.has_imbalance)
+      score += 8.0;
+
    return MathMin(score, 100.0);
 }
 

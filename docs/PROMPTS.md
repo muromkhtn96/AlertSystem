@@ -1,6 +1,6 @@
 # REACTION POINT INDICATOR v3.3 — IMPLEMENTATION PROMPTS (Optimized)
 
-**19 files (1 main `.mq5` + 18 `.mqh`) | 8 phases | 35 prompts**
+**19 files (1 main `.mq5` + 18 `.mqh`) | 8 phases | 36 prompts**
 **Mỗi prompt = 1 session riêng. Paste prompt + HEADER nếu cần.**
 
 ---
@@ -29,7 +29,7 @@ Phase 4: P11, P12, P13              (Advanced — cần Phase 2+3)
 Phase 5: P14, P15, P16              (UI — cần Phase 4)
 Phase 6: P17                        (Main — tổng hợp)
 Phase 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-Phase 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation)
+Phase 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance)
 ```
 
 ---
@@ -200,12 +200,14 @@ SReactionPoint {
    bool is_order_block;  int ob_bar_index;  // -1 nếu không tìm thấy
    // P34:
    bool has_fvg;  bool has_fvg_bullish;  // FVG overlap detection
+   // P36:
+   bool has_imbalance;  // Imbalance candle at zone formation
 
    Init(): ZeroMemory + confluence_id=-1, ob_bar_index=-1,
            zone_high_original=0, zone_low_original=0, has_wick_filter=false,
            strong_test_count=0, weak_test_count=0, test_vol_index=0,
            is_order_block=false, ArrayInitialize(test_volumes,0),
-           has_fvg=false, has_fvg_bullish=false
+           has_fvg=false, has_fvg_bullish=false, has_imbalance=false
 }
 
 SConfluenceZone {
@@ -437,6 +439,7 @@ PERFORMANCE: gọi mỗi 5 phút (300s), KHÔNG mỗi bar. Exponential backoff k
    - P24b ATR cap: M15-=0.5×ATR, M30=0.6×ATR, H1=0.55×ATR, H4=0.7×ATR, D1+=1.0×ATR
    - P24c: zone_high_original/zone_low_original lưu sau safety clamps
    - Min width floor: PipsToPrice(g_zone_width_pips/2)
+   - P36 Imbalance detection: scan zone_bar±1, body>=70% + vol>1.5×MA20 → has_imbalance=true
    - is_active=true, is_fresh=true, confluence_id=-1
    - opacity: PREMIUM=80, L1=70, L2=50, L3=35
    - Array overflow → evict: inactive → lowest score non-conf → oldest → oldest conf(force, v3.0.2)
@@ -547,6 +550,7 @@ CalcBaseScore(rp_index): tổng 6+2 thành phần:
   h) P24d CalcZonePrecisionScore ([-5,+13]): P27b linear gradient:
      width_ratio <= 0.15→+5 | ≤0.30→5→2 | ≤0.55→2→0 | ≤0.80→0→-2 | ≤1.20→-2→-5 | >1.20→-5
      + retest-refined (shrunk>=15%): +5 | + wick_filter: +3
+  i) P36 Imbalance candle (+8): has_imbalance → +8. Detected in CreateRP: body>=70% range + vol>1.5×MA20
 
   return MathMin(tổng, 100.0)
 
@@ -1157,6 +1161,26 @@ First touch bonus (+10 trong CalcFinalScore cũ) đã tích hợp vào weighted<
 
 ---
 
+### P36: Imbalance Candle Bonus (sửa RP_Detection.mqh + RP_Scoring.mqh)
+
+```
+Imbalance candle = nến có body >= 70% range VÀ volume > 1.5× MA20.
+Cho thấy institutional urgency — zone tạo bởi/gần imbalance candle đáng tin hơn.
+
+Detection (trong CreateRP, sau zone width clamp):
+  - Scan zone_bar ± 1 (3 nến: trước, tại, sau zone bar)
+  - Nếu bất kỳ nến nào có body >= 70% range + vol > 1.5× g_cached_volume_ma20:
+    rp.has_imbalance = true, break
+
+Scoring (trong CalcBaseScore):
+  - has_imbalance → +8 điểm (base score component)
+  - Không cần direction alignment — imbalance bất kỳ hướng nào đều cho thấy institutional interest
+
+Range: [0, +8]
+```
+
+---
+
 ### P32: Adaptive Swing Lookback (sửa RP_Detection.mqh)
 
 ```
@@ -1320,6 +1344,14 @@ HTF Nesting Bonus chi tiết:
 | 14 | Detection | **H1 ATR width cap**: 0.7 → 0.55 (thinner zones) | **MEDIUM**: cleaner chart |
 | 15 | Main | **H1 preset optimized**: swing=5, dist=40, reaction=20, decay=15/3, score=80 | **HIGH**: premium-only H1 zones |
 
+#### Imbalance Candle Bonus (P36)
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 16 | Defines | SReactionPoint: +has_imbalance | **LOW**: data structure |
+| 17 | Detection | **Imbalance detection** in CreateRP: body>=70% + vol>1.5×MA20 at zone_bar±1 | **HIGH**: institutional urgency |
+| 18 | Scoring | CalcBaseScore: +8 pts for has_imbalance | **MEDIUM**: better zone differentiation |
+
 ---
 
 ## THỨ TỰ THỰC THI
@@ -1332,7 +1364,7 @@ PHASE 4: P11, P12, P13
 PHASE 5: P14, P15, P16 → compile test P1-P16
 PHASE 6: P17
 PHASE 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-PHASE 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation)
+PHASE 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance)
 ```
 
 ---
