@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RP v3.3 — Backtest Logs & Optimization Guide</title>
+<style>
+:root{--bg:#0c0f14;--bg2:#111620;--bg3:#161c28;--border:#1e2636;--text:#c0c8d8;--dim:#5a6a80;--blue:#3a9ed8;--red:#d85050;--green:#2eaa5a;--amber:#d4a830;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',sans-serif;font-size:14px;line-height:1.7;}
+.container{max-width:920px;margin:0 auto;padding:40px 24px 80px;}
+.hero{text-align:center;padding:50px 20px 30px;border-bottom:1px solid var(--border);margin-bottom:36px;}
+.hero h1{font-size:26px;font-weight:700;color:#e8eef6;}.hero h1 span{color:var(--blue);}
+.hero .sub{font-size:13px;color:var(--dim);margin-top:6px;}
+.toc{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:18px 22px;margin-bottom:36px;}
+.toc-t{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;}
+.toc a{display:block;color:var(--blue);text-decoration:none;padding:3px 0;font-size:13px;}.toc a:hover{color:#60b8f0;}
+.toc a span{color:var(--dim);margin-right:8px;}
+h2{font-size:19px;font-weight:700;color:#e0e8f2;padding-top:36px;margin-bottom:16px;border-top:1px solid var(--border);}
+h2:first-of-type{border-top:none;padding-top:0;}
+h3{font-size:14px;font-weight:600;color:#c8d0e0;margin:22px 0 10px;}
+h4{font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin:18px 0 8px;}
+p{margin-bottom:10px;}
+ul,ol{margin:0 0 14px 20px;}li{margin-bottom:4px;}
+strong{color:#d8e0ec;}
+table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:13px;}
+th{background:var(--bg3);color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.7px;padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);}
+td{padding:6px 10px;border-bottom:1px solid rgba(30,38,54,.5);vertical-align:top;}
+tr:hover td{background:rgba(58,158,216,.03);}
+.td-blue{color:var(--blue);font-weight:600;}
+.td-red{color:var(--red);font-weight:600;}
+.td-green{color:var(--green);font-weight:600;}
+.td-amber{color:var(--amber);font-weight:600;}
+.td-dim{color:var(--dim);}
+pre{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin:10px 0 18px;font-family:'JetBrains Mono','Consolas',monospace;font-size:12px;line-height:1.6;overflow-x:auto;color:#a0b0c4;}
+code{background:var(--bg3);padding:1px 5px;border-radius:3px;font-family:'JetBrains Mono','Consolas',monospace;font-size:12px;color:var(--blue);}
+.box{border-radius:6px;padding:12px 16px;margin:14px 0;font-size:13px;line-height:1.6;}
+.box-tip{background:rgba(46,170,90,.08);border-left:3px solid var(--green);}
+.box-warn{background:rgba(212,168,48,.08);border-left:3px solid var(--amber);}
+.box-danger{background:rgba(216,80,80,.08);border-left:3px solid var(--red);}
+.box-info{background:rgba(58,158,216,.06);border-left:3px solid var(--blue);}
+.flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 18px;}
+.flow-box{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;text-align:center;font-size:12px;min-width:120px;}
+.flow-box strong{display:block;font-size:13px;color:#c8d4e4;margin-bottom:2px;}
+.flow-arrow{color:var(--dim);font-size:16px;}
+.step-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 18px;}
+.step-card{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px 14px;}
+.step-card h4{margin:0 0 6px;color:var(--blue);}
+.step-card p{margin:0;font-size:12px;color:var(--dim);}
+@media(max-width:640px){.step-grid{grid-template-columns:1fr;}.container{padding:20px 14px 60px;}}
+.footer{text-align:center;margin-top:36px;padding-top:16px;border-top:1px solid var(--border);color:var(--dim);font-size:11px;}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="hero">
+  <h1>Backtest Logs &amp; <span>Optimization</span></h1>
+  <div class="sub">Reaction Point v3.3 — Thu thap data, phan tich, toi uu scoring</div>
+</div>
+
+<div class="toc">
+  <div class="toc-t">Muc Luc</div>
+  <a href="#s1"><span>01</span> Tong Quan Quy Trinh</a>
+  <a href="#s2"><span>02</span> Bat Logger &amp; Thu Thap Data</a>
+  <a href="#s3"><span>03</span> Cau Truc 3 File CSV</a>
+  <a href="#s4"><span>04</span> Phan Tich Bang Excel</a>
+  <a href="#s5"><span>05</span> Phan Tich Bang Python</a>
+  <a href="#s6"><span>06</span> Doc Ket Qua &amp; Tim Van De</a>
+  <a href="#s7"><span>07</span> Toi Uu Code Tu Data</a>
+  <a href="#s8"><span>08</span> Quy Trinh Lap Lai</a>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s1">01. Tong Quan Quy Trinh</h2>
+
+<div class="flow">
+  <div class="flow-box"><strong>1. Thu thap</strong>Bat Logger<br>Chay 2+ tuan</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>2. Xuat CSV</strong>3 file log<br>zones/tests/outcomes</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>3. Phan tich</strong>Excel hoac Python<br>Win rate theo yeu to</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>4. Toi uu</strong>Dieu chinh weight<br>trong code</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>5. Kiem chung</strong>Chay lai Logger<br>So sanh truoc/sau</div>
+</div>
+
+<div class="box box-warn">
+  <strong>Nguyen tac vang:</strong> Chi thay doi 1-2 weights moi lan. Thay doi nhieu cung luc &rarr; khong biet cai nao cai thien.
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s2">02. Bat Logger &amp; Thu Thap Data</h2>
+
+<h3>Buoc 1: Bat Logger trong MT5</h3>
+<p>Khi them indicator vao chart, trong tab <strong>Inputs</strong>:</p>
+<table>
+  <tr><th>Input</th><th>Gia tri</th><th>Mo ta</th></tr>
+  <tr><td><code>Enable_Logger</code></td><td class="td-green"><strong>true</strong></td><td>Bat ghi log CSV</td></tr>
+  <tr><td><code>Outcome_Measure_Bars</code></td><td>20</td><td>Do phan ung sau 20 nen (H1 = 20h, M15 = 5h)</td></tr>
+</table>
+
+<h3>Buoc 2: Chay du lau</h3>
+<table>
+  <tr><th>TF</th><th>Thoi gian toi thieu</th><th>Zone du kien</th><th>Ly do</th></tr>
+  <tr><td>M15</td><td>1 tuan</td><td>200+ zones</td><td>Nhieu zone/ngay, decay nhanh</td></tr>
+  <tr><td>H1</td><td class="td-blue">2 tuan</td><td>100+ zones</td><td>Can du zone Premium de thong ke</td></tr>
+  <tr><td>H4</td><td>1 thang</td><td>80+ zones</td><td>It zone/ngay</td></tr>
+</table>
+
+<div class="box box-tip">
+  <strong>Meo:</strong> Chay tren <strong>Strategy Tester</strong> (visual mode OFF) de thu thap data nhanh hon — 1 nam data trong vai phut. File CSV luu tai: <code>C:\Users\{user}\AppData\Roaming\MetaQuotes\Terminal\Common\Files\RP_Logs\</code>
+</div>
+
+<h3>Buoc 3: Tim file CSV</h3>
+<pre>
+MT5 Data Folder (Common)/Files/RP_Logs/
+├── EURUSD_PERIOD_H1_zones.csv      ← Zone duoc tao
+├── EURUSD_PERIOD_H1_tests.csv      ← Moi lan zone bi test
+└── EURUSD_PERIOD_H1_outcomes.csv   ← Ket qua phan ung sau N bars
+</pre>
+
+<div class="box box-info">
+  <strong>Tim Common folder:</strong> MT5 &rarr; File &rarr; Open Data Folder &rarr; di len 1 cap &rarr; <code>Common\Files\RP_Logs\</code>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s3">03. Cau Truc 3 File CSV</h2>
+
+<h3>File 1: <code>_zones.csv</code> — Moi zone duoc tao</h3>
+<table>
+  <tr><th>Column</th><th>Vi du</th><th>Y nghia</th></tr>
+  <tr><td>timestamp</td><td>2024.01.15 14:00</td><td>Thoi diem tao zone</td></tr>
+  <tr><td>rp_id</td><td>42</td><td>ID duy nhat cua zone</td></tr>
+  <tr><td>type</td><td>SUPPORT</td><td>Loai: SUPPORT/RESISTANCE</td></tr>
+  <tr><td>price</td><td>1.09650</td><td>Gia trung tam</td></tr>
+  <tr><td>zone_high / zone_low</td><td>1.09680 / 1.09620</td><td>Bien zone</td></tr>
+  <tr><td>zone_width_pips</td><td>6.0</td><td>Do rong zone (pips)</td></tr>
+  <tr><td>atr14_pips</td><td>24.5</td><td>ATR tai thoi diem tao</td></tr>
+  <tr><td>width_atr_ratio</td><td>0.245</td><td>Zone width / ATR</td></tr>
+  <tr><td>pattern</td><td>PATTERN_PINBAR</td><td>Candle pattern</td></tr>
+  <tr><td>reaction_pips</td><td>32.4</td><td>Do manh reaction</td></tr>
+  <tr><td>volume_ratio</td><td>1.85</td><td>Volume / MA20</td></tr>
+  <tr><td>session</td><td>SESSION_LONDON</td><td>Phien tao zone</td></tr>
+  <tr><td>regime</td><td>REGIME_WEAK_TREND</td><td>Trang thai thi truong</td></tr>
+  <tr><td>has_wick_filter</td><td>Y/N</td><td>Co wick filter</td></tr>
+  <tr><td>is_order_block</td><td>Y/N</td><td>Co phai Order Block</td></tr>
+  <tr><td>base_score / final_score</td><td>65.0 / 128.0</td><td>Diem co ban / cuoi</td></tr>
+  <tr><td>level</td><td>RP_PREMIUM</td><td>Phan cap</td></tr>
+</table>
+
+<h3>File 2: <code>_tests.csv</code> — Moi lan zone bi test</h3>
+<table>
+  <tr><th>Column</th><th>Vi du</th><th>Y nghia</th></tr>
+  <tr><td>rp_id</td><td>42</td><td>Zone nao bi test</td></tr>
+  <tr><td>test_number</td><td>1</td><td>Lan test thu may</td></tr>
+  <tr><td>is_body_test</td><td>BODY / WICK</td><td>Body vao zone (manh) hay chi wick (yeu)</td></tr>
+  <tr><td>test_volume</td><td>3240</td><td>Volume tai bar test</td></tr>
+  <tr><td>volume_vs_ma20</td><td>1.62</td><td>Volume / MA20</td></tr>
+  <tr><td>zone_width_before/after</td><td>6.0 / 5.2</td><td>Zone co thu hep sau test?</td></tr>
+  <tr><td>score_at_test</td><td>128.0</td><td>Score tai thoi diem test</td></tr>
+</table>
+
+<h3>File 3: <code>_outcomes.csv</code> — Ket qua sau N bars</h3>
+<table>
+  <tr><th>Column</th><th>Vi du</th><th>Y nghia</th></tr>
+  <tr><td>score_at_test</td><td>128.0</td><td>Score khi test xay ra</td></tr>
+  <tr><td>test_count</td><td>1</td><td>Day la lan test thu may</td></tr>
+  <tr><td>max_favorable_pips</td><td>35.2</td><td class="td-green">Gia di <strong>thuan loi</strong> toi da (pips)</td></tr>
+  <tr><td>max_adverse_pips</td><td>8.4</td><td class="td-red">Gia di <strong>bat loi</strong> toi da (pips)</td></tr>
+  <tr><td>bars_to_max_favorable</td><td>6</td><td>Mat bao nhieu bar de dat max</td></tr>
+  <tr><td>outcome</td><td>STRONG_REACT</td><td>Phan loai ket qua</td></tr>
+  <tr><td>session / regime / pattern</td><td>...</td><td>Context tai thoi diem test</td></tr>
+  <tr><td>strong_tests / weak_tests</td><td>1 / 0</td><td>So lan body test / wick test</td></tr>
+</table>
+
+<h4>Outcome Classification</h4>
+<table>
+  <tr><th>Outcome</th><th>Dieu kien</th><th>Y nghia</th></tr>
+  <tr><td class="td-green"><strong>STRONG_REACT</strong></td><td>max_favorable &ge; 1&times;ATR</td><td>Zone phan ung manh — <strong>thanh cong</strong></td></tr>
+  <tr><td class="td-blue">WEAK_REACT</td><td>max_favorable &ge; 0.5&times;ATR</td><td>Phan ung yeu nhung co</td></tr>
+  <tr><td class="td-red"><strong>FAILED</strong></td><td>max_adverse &ge; 0.5&times;ATR</td><td>Gia di nguoc — <strong>that bai</strong></td></tr>
+  <tr><td class="td-dim">NEUTRAL</td><td>Khong di chuyen dang ke</td><td>Khong ro ket qua</td></tr>
+  <tr><td class="td-red">BROKEN</td><td>Zone bi pha hoan toan</td><td>Zone khong giu</td></tr>
+</table>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s4">04. Phan Tich Bang Excel</h2>
+
+<h3>Buoc 1: Mo file outcomes.csv</h3>
+<p>Excel &rarr; Data &rarr; From Text/CSV &rarr; chon file <code>_outcomes.csv</code></p>
+
+<h3>Buoc 2: Tao cot Win/Loss</h3>
+<pre>
+Cot moi "Win" (cot R):
+=IF(OR(I2="STRONG_REACT", I2="WEAK_REACT"), 1, 0)
+
+Cot moi "Loss" (cot S):
+=IF(OR(I2="FAILED", I2="BROKEN"), 1, 0)
+</pre>
+
+<h3>Buoc 3: Tinh Win Rate theo Score Range</h3>
+<pre>
+Premium (&ge;120):
+=COUNTIFS(D:D,">=120", R:R, 1) / COUNTIFS(D:D,">=120", R:R,">=0")
+
+Level 1 (85-119):
+=COUNTIFS(D:D,">=85", D:D,"&lt;120", R:R, 1) / COUNTIFS(D:D,">=85", D:D,"&lt;120", R:R,">=0")
+</pre>
+
+<h3>Buoc 4: Pivot Table — Win Rate theo tung yeu to</h3>
+
+<div class="step-grid">
+  <div class="step-card">
+    <h4>Theo Session</h4>
+    <p>Row: session &rarr; Values: AVG(Win)<br>Tim session nao co win rate cao/thap nhat</p>
+  </div>
+  <div class="step-card">
+    <h4>Theo Regime</h4>
+    <p>Row: regime &rarr; Values: AVG(Win)<br>Ranging co tot hon Trend khong?</p>
+  </div>
+  <div class="step-card">
+    <h4>Theo Pattern</h4>
+    <p>Row: pattern &rarr; Values: AVG(Win)<br>Pinbar co thuc su tot hon Engulfing?</p>
+  </div>
+  <div class="step-card">
+    <h4>Theo Test Count</h4>
+    <p>Row: test_count &rarr; Values: AVG(Win)<br>Xac nhan mitigation: test 3+ co that su yeu?</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s5">05. Phan Tich Bang Python</h2>
+
+<h3>Script phan tich co ban</h3>
+<pre>
+import pandas as pd
+
+# Doc data
+outcomes = pd.read_csv('EURUSD_PERIOD_H1_outcomes.csv')
+zones    = pd.read_csv('EURUSD_PERIOD_H1_zones.csv')
+
+# Them cot win/loss
+outcomes['win'] = outcomes['outcome'].isin(['STRONG_REACT','WEAK_REACT']).astype(int)
+outcomes['loss'] = outcomes['outcome'].isin(['FAILED','BROKEN']).astype(int)
+
+# === 1. WIN RATE THEO SCORE RANGE ===
+bins = [0, 40, 60, 85, 120, 200]
+labels = ['Hidden', 'LV3', 'LV2', 'LV1', 'Premium']
+outcomes['level'] = pd.cut(outcomes['score_at_test'], bins=bins, labels=labels)
+print(outcomes.groupby('level')['win'].agg(['mean','count']))
+
+# === 2. WIN RATE THEO SESSION ===
+print(outcomes.groupby('session')['win'].agg(['mean','count']).sort_values('mean', ascending=False))
+
+# === 3. WIN RATE THEO REGIME ===
+print(outcomes.groupby('regime')['win'].agg(['mean','count']))
+
+# === 4. WIN RATE THEO TEST COUNT (MITIGATION) ===
+print(outcomes.groupby('test_count')['win'].agg(['mean','count']))
+
+# === 5. WIN RATE THEO PATTERN ===
+print(outcomes.groupby('pattern')['win'].agg(['mean','count']).sort_values('mean', ascending=False))
+
+# === 6. OPTIMAL SCORE THRESHOLD ===
+for threshold in range(80, 160, 10):
+    subset = outcomes[outcomes['score_at_test'] >= threshold]
+    if len(subset) > 5:
+        wr = subset['win'].mean()
+        n = len(subset)
+        print(f"Score >= {threshold}: Win Rate = {wr:.1%} (n={n})")
+</pre>
+
+<h3>Script nang cao — Tim weight toi uu</h3>
+<pre>
+# === 7. TUONG QUAN TUNG YEU TO VOI OUTCOME ===
+# Gop zones + outcomes
+merged = outcomes.merge(zones, on='rp_id', suffixes=('','_zone'))
+
+# Correlation matrix
+factors = ['reaction_pips','volume_ratio','width_atr_ratio','final_score_zone']
+for f in factors:
+    if f in merged.columns:
+        corr = merged[f].corr(merged['win'])
+        print(f"{f}: correlation with win = {corr:.3f}")
+
+# === 8. WICK FILTER HIEU QUA? ===
+wf = outcomes.merge(zones[['rp_id','has_wick_filter']], on='rp_id')
+print(wf.groupby('has_wick_filter')['win'].agg(['mean','count']))
+
+# === 9. ORDER BLOCK vs SWING ===
+ob = outcomes.merge(zones[['rp_id','is_order_block']], on='rp_id')
+print(ob.groupby('is_order_block')['win'].agg(['mean','count']))
+
+# === 10. BODY TEST vs WICK TEST ===
+tests = pd.read_csv('EURUSD_PERIOD_H1_tests.csv')
+test_quality = tests.groupby('rp_id')['is_body_test'].apply(
+    lambda x: (x=='BODY').mean()
+).reset_index(name='body_ratio')
+tq = outcomes.merge(test_quality, on='rp_id')
+tq['body_dominant'] = tq['body_ratio'] >= 0.5
+print(tq.groupby('body_dominant')['win'].agg(['mean','count']))
+</pre>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s6">06. Doc Ket Qua &amp; Tim Van De</h2>
+
+<h3>Ket qua mau (vi du)</h3>
+<pre>
+Score >= 80:  Win Rate = 62.3% (n=156)
+Score >= 100: Win Rate = 71.8% (n=89)
+Score >= 120: Win Rate = 81.4% (n=43)   &larr; Premium
+Score >= 140: Win Rate = 88.2% (n=17)   &larr; Premium + FVG/BB
+Score >= 150: Win Rate = 91.7% (n=12)   &larr; Top zones
+</pre>
+
+<h3>Cach doc va hanh dong</h3>
+<table>
+  <tr><th>Ket qua</th><th>Y nghia</th><th>Hanh dong</th></tr>
+  <tr>
+    <td>Premium win rate <strong>&lt; 75%</strong></td>
+    <td class="td-red">Threshold 120 qua thap</td>
+    <td>Tang Premium threshold len 130-140 trong <code>ClassifyRPLevel</code></td>
+  </tr>
+  <tr>
+    <td>Premium win rate <strong>&gt; 90%</strong></td>
+    <td class="td-green">Qua strict — it tin hieu</td>
+    <td>Giam threshold xuong 110-115, hoac giam min_score_to_show</td>
+  </tr>
+  <tr>
+    <td>Session Dead win rate <strong>&gt; 60%</strong></td>
+    <td class="td-amber">Dead session penalty qua manh</td>
+    <td>Giam session penalty Dead tu -20 xuong -10 trong <code>RP_Session.mqh</code></td>
+  </tr>
+  <tr>
+    <td>Test count 3+ win rate <strong>&gt; 50%</strong></td>
+    <td class="td-amber">Mitigation penalty qua manh</td>
+    <td>Giam penalty tu -5 xuong -3 moi test trong <code>CalcTestQualityScore</code></td>
+  </tr>
+  <tr>
+    <td>Test count 3+ win rate <strong>&lt; 30%</strong></td>
+    <td class="td-green">Mitigation logic dung</td>
+    <td>Giu nguyen — zone 3+ test dung la yeu</td>
+  </tr>
+  <tr>
+    <td>OB zones win rate <strong>== Swing zones</strong></td>
+    <td class="td-dim">OB detection khong them gia tri</td>
+    <td>Xem lai <code>FindOrderBlockBar</code> — co the threshold qua loose</td>
+  </tr>
+  <tr>
+    <td>Wick filter zones win rate <strong>&gt;&gt; no-filter</strong></td>
+    <td class="td-green">Wick filter hieu qua</td>
+    <td>Tang wick filter bonus tu +3 len +5 trong <code>CalcZonePrecisionScore</code></td>
+  </tr>
+</table>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s7">07. Toi Uu Code Tu Data</h2>
+
+<h3>Noi chinh trong code</h3>
+<table>
+  <tr><th>Dieu chinh</th><th>File</th><th>Function</th><th>Line reference</th></tr>
+  <tr><td>Score thresholds</td><td><code>RP_Utils.mqh</code></td><td><code>ClassifyRPLevel</code></td><td>Premium &ge;120, LV1 &ge;85</td></tr>
+  <tr><td>Reaction weight</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcBaseScore</code></td><td>max 35 — tang/giam</td></tr>
+  <tr><td>Pattern weights</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcPatternDirectionScore</code></td><td>Pinbar 12, Engulfing 10</td></tr>
+  <tr><td>Volume weight</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcVolumeScore</code></td><td>max 15 — tang/giam</td></tr>
+  <tr><td>Session penalties</td><td><code>RP_Session.mqh</code></td><td><code>GetSessionScoreAdj</code></td><td>Dead -20, Asian -10</td></tr>
+  <tr><td>Regime penalties</td><td><code>RP_RegimeFilter.mqh</code></td><td><code>GetRegimeScoreAdj</code></td><td>Counter-trend -30</td></tr>
+  <tr><td>Mitigation curve</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcTestQualityScore</code></td><td>Fresh +10, test1 +12, 3+ penalty</td></tr>
+  <tr><td>FVG bonus</td><td><code>RP_FVG.mqh</code></td><td><code>CalcFVGBonus</code></td><td>Aligned +15, misaligned +5</td></tr>
+  <tr><td>Breaker bonus</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcFinalScore</code></td><td>+10 on top of +15 reversal</td></tr>
+  <tr><td>Imbalance bonus</td><td><code>RP_Scoring.mqh</code></td><td><code>CalcBaseScore</code></td><td>+8</td></tr>
+  <tr><td>HTF nesting bonus</td><td><code>RP_Confluence.mqh</code></td><td><code>CalcHTFNestingBonus</code></td><td>+12/+20/+30</td></tr>
+  <tr><td>Decay speed</td><td><code>RP_DynamicDecay.mqh</code></td><td><code>CalcDecayPenalty</code></td><td>interval/points per preset</td></tr>
+  <tr><td>Min distance</td><td><code>RP_Main.mq5</code></td><td><code>ApplyTFPreset</code></td><td>H1:40, H4:50 pips</td></tr>
+  <tr><td>Overlap margin</td><td><code>RP_Drawing.mqh</code></td><td><code>SuppressOverlappingZones</code></td><td>ATR&times;0.8, same-type &times;1.5</td></tr>
+</table>
+
+<h3>Vi du: Dieu chinh Session weights</h3>
+<p>Data cho thay Asian session win rate = 72% (cao hon du kien):</p>
+<pre>
+// RP_Session.mqh — GetSessionScoreAdj()
+// TRUOC:
+case SESSION_ASIAN: return -10.0;
+
+// SAU (giam penalty):
+case SESSION_ASIAN: return -5.0;
+</pre>
+
+<h3>Vi du: Dieu chinh Mitigation curve</h3>
+<p>Data cho thay test 2 van co win rate 68% (khong yeu nhu du kien):</p>
+<pre>
+// RP_Scoring.mqh — CalcTestQualityScore()
+// TRUOC:
+if(weighted &lt; 2.5) return 5.0;    // Test 2: +5
+
+// SAU (tang diem cho test 2):
+if(weighted &lt; 2.5) return 8.0;    // Test 2: +8 (data confirms still strong)
+</pre>
+
+<div class="box box-danger">
+  <strong>KHONG lam:</strong><br>
+  &bull; Thay doi nhieu weight cung luc<br>
+  &bull; Thay doi dua tren &lt;50 samples<br>
+  &bull; Overfit cho 1 cap tien duy nhat<br>
+  &bull; Tang score cho yeu to co correlation &lt; 0.1
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<h2 id="s8">08. Quy Trinh Lap Lai</h2>
+
+<div class="flow">
+  <div class="flow-box"><strong>Round 1</strong>Chay 2 tuan<br>Thu thap baseline</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>Phan tich</strong>Tim 1-2 van de<br>lon nhat</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>Fix</strong>Dieu chinh<br>1-2 weights</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>Round 2</strong>Chay 2 tuan<br>So sanh</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box"><strong>Repeat</strong>Cho den khi<br>Premium &ge;85%</div>
+</div>
+
+<h3>Checklist truoc khi chinh code</h3>
+<table>
+  <tr><th>#</th><th>Check</th><th>OK?</th></tr>
+  <tr><td>1</td><td>Co &ge;50 outcomes cho level dang xet?</td><td></td></tr>
+  <tr><td>2</td><td>Chi thay doi 1-2 weights?</td><td></td></tr>
+  <tr><td>3</td><td>Data tu &ge;2 cap tien khac nhau?</td><td></td></tr>
+  <tr><td>4</td><td>Thay doi co logic (khong chi la dieu chinh so)?</td><td></td></tr>
+  <tr><td>5</td><td>Da backup code truoc khi sua?</td><td></td></tr>
+  <tr><td>6</td><td>Sau khi sua: compile khong loi?</td><td></td></tr>
+  <tr><td>7</td><td>Chay lai Logger de so sanh?</td><td></td></tr>
+</table>
+
+<h3>Muc tieu</h3>
+<table>
+  <tr><th>Metric</th><th>Muc tieu</th><th>Hanh dong neu khong dat</th></tr>
+  <tr><td>Premium Win Rate</td><td class="td-green"><strong>&ge; 80%</strong></td><td>Tang Premium threshold hoac them confirmations</td></tr>
+  <tr><td>Premium + FVG/BB</td><td class="td-green"><strong>&ge; 85%</strong></td><td>Tang FVG/BB bonus</td></tr>
+  <tr><td>Level 1 Win Rate</td><td>&ge; 65%</td><td>Dieu chinh LV1 threshold</td></tr>
+  <tr><td>False Zone Rate</td><td class="td-red"><strong>&le; 15%</strong></td><td>Tang min_reaction, min_distance</td></tr>
+  <tr><td>Avg R:R on wins</td><td>&ge; 1:1.5</td><td>Dieu chinh TP targets</td></tr>
+</table>
+
+<div class="footer">
+  Reaction Point v3.3 — Backtest &amp; Optimization Guide<br>
+  Data-driven scoring optimization for institutional-grade zone detection
+</div>
+
+</div>
+</body>
+</html>

@@ -394,4 +394,65 @@ Navigator (Ctrl+N) → Indicators → ReactionPoint → keo RP_Main vao chart
 
 ---
 
+## 9. BACKTEST & TOI UU
+
+### 9.1 Logger da bat mac dinh
+
+`Enable_Logger = true` (mac dinh). Khi indicator chay, CSV tu dong ghi.
+
+### 9.2 File log luu o dau?
+
+```
+Cach 1: MT5 → File → Open Data Folder
+        → di len 1 cap → Common → Files → RP_Logs/
+
+Cach 2: Truy cap truc tiep:
+        C:\Users\{TEN_USER}\AppData\Roaming\MetaQuotes\Terminal\Common\Files\RP_Logs\
+
+3 file CSV:
+  {SYMBOL}_{TF}_zones.csv      ← zone duoc tao
+  {SYMBOL}_{TF}_tests.csv      ← moi lan zone bi test
+  {SYMBOL}_{TF}_outcomes.csv   ← ket qua phan ung sau N bars
+```
+
+### 9.3 Cach mo log
+
+- **Excel**: File → Open → chon file .csv → Delimiter = Comma
+- **Google Sheets**: Upload file .csv len Google Drive → mo bang Sheets
+- **Notepad/VSCode**: Mo truc tiep de xem raw data
+
+### 9.4 Gui log de toi uu
+
+Khi co du data (toi thieu 2 tuan chay live hoac Strategy Tester):
+
+1. Mo thu muc `RP_Logs/`
+2. Copy 3 file CSV cua cap tien + TF ban muon toi uu
+   - Vi du: `EURUSD_PERIOD_H1_zones.csv`, `_tests.csv`, `_outcomes.csv`
+3. Gui 3 file nay trong conversation voi Claude
+4. Claude se:
+   - Phan tich win rate theo level, session, regime, pattern, test count
+   - Tim yeu to nao dang over/under-weighted
+   - De xuat chinh weight cu the (file + function + gia tri moi)
+   - Truc tiep sua code va verify
+
+**Cang nhieu data cang chinh xac — toi thieu 50+ outcomes.**
+
+### 9.5 Chay nhanh bang Strategy Tester
+
+De thu thap data nhanh (1 nam trong vai phut):
+
+1. MT5 → View → Strategy Tester (Ctrl+R)
+2. Chon: Indicator → ReactionPoint/RP_Main
+3. Symbol: cap tien muon test (vd: EURUSD)
+4. Period: H1
+5. Date: 1 nam gan nhat
+6. Model: Every tick (hoac Open prices neu muon nhanh)
+7. Visual mode: **TAT** (nhanh hon nhieu)
+8. Nhan Start
+9. Khi xong → lay CSV tai `Common/Files/RP_Logs/`
+
+→ Xem chi tiet phan tich: **docs/BACKTEST_GUIDE.html**
+
+---
+
 **Version:** 3.3 | **Files:** 19 (1 .mq5 + 18 .mqh) | **Score Cap:** 200 | **Anti-repainting:** Yes

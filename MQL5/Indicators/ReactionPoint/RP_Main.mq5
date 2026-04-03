@@ -128,7 +128,7 @@ input int              Dashboard_Font_Size    = 9;       // Dashboard font size
 input int              Label_Font_Size        = 8;       // Zone label font size
 
 //--- Data Logger (P26)
-input bool   Enable_Logger                    = false;   // Log zone data to CSV for optimization
+input bool   Enable_Logger                    = true;    // Log zone data to CSV for optimization
 input int    Outcome_Measure_Bars             = 20;      // Bars after test to measure reaction
 
 //--- Colors
