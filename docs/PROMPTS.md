@@ -1108,6 +1108,8 @@ Functions: InitLogger, DeinitLogger, LogZoneCreated, LogZoneTest, LogZoneBroken,
 - Input: Enable_Logger(false), Outcome_Measure_Bars(20)
 - v3.0.2: ArrayResize trước check g_use_logger, bool return + GetLastError
 - APPEND mode, header 1 lần, auto rotation 10MB
+- Backtest guide: docs/BACKTEST_GUIDE.html — quy trình thu thập, phân tích, tối ưu
+- Log folder: Common/Files/RP_Logs/{SYMBOL}_{TF}_*.csv
 ```
 
 ---
