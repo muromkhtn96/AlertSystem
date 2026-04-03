@@ -1,6 +1,6 @@
-# REACTION POINT INDICATOR v3.0 — IMPLEMENTATION PROMPTS (Optimized)
+# REACTION POINT INDICATOR v3.3 — IMPLEMENTATION PROMPTS (Optimized)
 
-**17 files (1 main `.mq5` + 16 `.mqh`) | 7 phases | 33 prompts**
+**19 files (1 main `.mq5` + 18 `.mqh`) | 8 phases | 35 prompts**
 **Mỗi prompt = 1 session riêng. Paste prompt + HEADER nếu cần.**
 
 ---
@@ -29,7 +29,7 @@ Phase 4: P11, P12, P13              (Advanced — cần Phase 2+3)
 Phase 5: P14, P15, P16              (UI — cần Phase 4)
 Phase 6: P17                        (Main — tổng hợp)
 Phase 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-Phase 8: P29 → P30 → P31 → P32 → P33
+Phase 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation)
 ```
 
 ---
@@ -37,6 +37,7 @@ Phase 8: P29 → P30 → P31 → P32 → P33
 ## § ALL GLOBALS REGISTRY (consolidated — thay vì rải ra 16 prompts)
 
 Tất cả globals khai báo trong `RP_Utils.mqh`, modules đọc trực tiếp.
+Ngoại lệ: FVG globals (`g_fvg_array`, `g_fvg_count`, `SFVG`) khai báo trong `RP_FVG.mqh`.
 
 ### RP Data
 ```cpp
@@ -79,7 +80,8 @@ int    g_sl_buffer_pips, g_entry_buffer_pips, g_max_setup_age_bars;
 int    g_confluence_merge_pips, g_htf_bars_to_scan;
 int    g_fibo_lookback_bars, g_fibo_tolerance_pips, g_min_candle_size_pips;
 int    g_zone_width_pips, g_min_score_to_show;
-ENUM_RP_LEVEL g_show_min_level = RP_PREMIUM;  // Min level to display on chart
+ENUM_RP_LEVEL g_show_min_level = RP_PREMIUM;  // Backward compat — computed from toggles
+bool   g_show_premium = true, g_show_level1 = false, g_show_level2 = false, g_show_level3 = false;
 int    g_proximity_alert_pips, g_reset_alert_pips;
 ENUM_TIMEFRAMES g_htf_1, g_htf_2;
 double g_reaction_atr_multiplier;
@@ -196,11 +198,14 @@ SReactionPoint {
    double test_volumes[4];  int test_vol_index;
    // P29:
    bool is_order_block;  int ob_bar_index;  // -1 nếu không tìm thấy
+   // P34:
+   bool has_fvg;  bool has_fvg_bullish;  // FVG overlap detection
 
    Init(): ZeroMemory + confluence_id=-1, ob_bar_index=-1,
            zone_high_original=0, zone_low_original=0, has_wick_filter=false,
            strong_test_count=0, weak_test_count=0, test_vol_index=0,
-           is_order_block=false, ArrayInitialize(test_volumes,0)
+           is_order_block=false, ArrayInitialize(test_volumes,0),
+           has_fvg=false, has_fvg_bullish=false
 }
 
 SConfluenceZone {
@@ -427,7 +432,9 @@ PERFORMANCE: gọi mỗi 5 phút (300s), KHÔNG mỗi bar. Exponential backoff k
    - P24a Wick filter (v3.2 TF-adaptive):
      M15/M30: wick>=50% range → zone=25% range (stricter)
      H1+: wick>=60% range → zone=30% range (standard)
-   - P24b ATR cap: M1-M15=0.5×ATR, M30-H4=0.7×ATR, D1+=1.0×ATR
+   - v3.3 ATR-adaptive proximity: effective_min_dist = max(fixed_pips, ATR×mult)
+     M15/M30: mult=0.4, H1+: mult=0.6. Zone replacement: new reaction > 1.5× existing → replace weak zone
+   - P24b ATR cap: M15-=0.5×ATR, M30=0.6×ATR, H1=0.55×ATR, H4=0.7×ATR, D1+=1.0×ATR
    - P24c: zone_high_original/zone_low_original lưu sau safety clamps
    - Min width floor: PipsToPrice(g_zone_width_pips/2)
    - is_active=true, is_fresh=true, confluence_id=-1
@@ -524,8 +531,9 @@ PERFORMANCE: CalcBaseScore CHỈ gọi khi g_rp_dirty[rp_index]==true. Dùng cac
 CalcBaseScore(rp_index): tổng 6+2 thành phần:
 
   a) Reaction Strength (max 35): MathMin((reaction_pips / atr_pips) * 35.0, 35.0)
-  b) Test Count (max 25): P25a CalcTestQualityScore — weighted = strong + weak×0.3
-     <0.1→0 | <1.1→5 | <2.1→12 | <3.1→20 | 3+ strong_ratio>=0.7→25 | else diminishing floor 5
+  b) Test Quality ([-15, +12]): P25a+P35 CalcTestQualityScore — mitigation-aware
+     weighted = strong×1.0 + weak×0.5
+     <0.1→+10 (fresh premium) | <1.5→+12 (confirmed) | <2.5→+5 (depleting) | 3+→5-excess×5 (floor -15)
   c) Candle Pattern (max 12): P27a CalcPatternDirectionScore — aligned=100%, misaligned=30%,
      OutsideBar=75% (direction-neutral), Unknown=50%. Base: Pinbar=12,Engulf=10,Outside=8,Wick=6
   d) Fibonacci (max 13): P19 CalcFibonacciScore — scan g_fibo_legs[],
@@ -545,6 +553,12 @@ CalcBaseScore(rp_index): tổng 6+2 thành phần:
 === 10.2 FINAL SCORE ===
 
 CalcFinalScore(rp_index):
+  rp = g_rp_array[rp_index]  // local copy
+  rp.base_score = CalcBaseScore(rp_index)
+  CheckZoneFVGOverlap(rp_index)  // writes has_fvg to g_rp_array directly
+  rp.has_fvg = g_rp_array[rp_index].has_fvg  // sync FVG flags to local copy (v3.3 fix)
+  rp.has_fvg_bullish = g_rp_array[rp_index].has_fvg_bullish
+
   adjusted = base_score
     + GetRegimeScoreAdj(rp_type)           // A: [-30, +20]
     - CalcDecayPenalty(rp_index)            // B: [0, -35+]
@@ -556,11 +570,13 @@ CalcFinalScore(rp_index):
     + GetTrendAlignmentScore(rp_type)       // P20: [-25, +20]
     + CalcHTFNestingBonus(rp_index)         // v3.2: [0, +30] HTF zone nesting
     + CalcAbsorptionAdj(rp_index)           // P25b: [-10, +5]
+    + CalcFVGBonus(rp_index)               // P34: [0, +15] FVG overlap
     + (is_role_reversed ? 15.0 : 0.0)
-    + (is_fresh && test_count==0 ? 10.0 : 0.0)
+    // NOTE: First touch bonus removed — CalcTestQualityScore handles fresh premium (+10) via P35
 
   rp.final_score = MathMax(0, MathMin(adjusted, SCORE_CAP))
   rp.rp_level = ClassifyRPLevel(rp.final_score)
+  g_rp_array[rp_index] = rp  // write back (FVG flags preserved)
 
 P25b CalcAbsorptionAdj(rp_index):
   - Cần >=2 tests recorded. So sánh volume nửa đầu vs nửa sau
@@ -695,7 +711,7 @@ P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
    P28: GetZoneBaseColor: Support→teal, Resistance→coral, Premium→gold bất kể type
 
 2. DrawRPZone(rp_index):
-   - **v3.2 Level filter**: skip zones below g_show_min_level (default: RP_PREMIUM only)
+   - **Level toggle (v3.2→v3.3)**: IsLevelVisible(rp_level) — 4 individual toggles, default: only Premium ON
    - OBJ_RECTANGLE FILL+BACK, time_formed→now+20bars
    - P28: +2 OBJ_TREND edge lines (EDGE_H_{id}, EDGE_L_{id}), width theo level
    - P23: lazy update — static props 1 lần, chỉ update time_end. Color/price CHỈ khi dirty
@@ -714,7 +730,7 @@ P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
 7. CreateSessionObjects(): 1 LẦN trong OnInit, colors blend 10%
 7b. UpdateSessionVisibility(): mỗi bar, chỉ update OBJPROP_TIME
 8. RedrawChangedRP():
-   - **v3.2 SuppressOverlappingZones()**: ATR×0.5 margin, keep strongest (Premium priority)
+   - **v3.3 SuppressOverlappingZones()**: ATR×0.8 margin (same-type: ATR×1.2), keep strongest
      g_rp_display_suppressed[] + g_prev_suppressed[] for state change detection
      Suppressed zones: objects deleted, auto-restored when winner expires
    - CHỈ vẽ lại RP có state thay đổi (static prev arrays compare)
@@ -797,8 +813,8 @@ v3.0.2: SafeUnicode(code, fallback) cho VPS/Wine compatibility
 INCLUDES (theo thứ tự):
   RP_Defines → RP_Utils → RP_RegimeFilter → RP_Session → RP_DynamicDecay
   → RP_NewsFilter → RP_SpreadFilter → RP_Detection → RP_MarketStructure
-  → RP_Scoring → RP_Confluence → RP_EntrySetup → RP_Stats
-  → RP_Drawing → RP_Dashboard → RP_Alerts
+  → RP_FVG → RP_Confluence → RP_Scoring → RP_EntrySetup → RP_Stats
+  → RP_Drawing → RP_Dashboard → RP_Alerts → RP_Logger
 
 === INPUT PARAMETERS (đầy đủ) ===
 
@@ -850,7 +866,7 @@ Use_Trend_Alignment=true
 
 // DISPLAY
 Zone_Width_Pips=4, Min_Score_To_Show=40
-Show_Min_Level=RP_PREMIUM  // v3.2: dropdown PRE/LV1/LV2/LV3 — default chỉ hiện Premium
+Show_Premium=true, Show_Level1=false, Show_Level2=false, Show_Level3=false  // v3.3: individual toggles
 Show_Dashboard=true, Show_Performance_Stats=true
 Proximity_Alert_Pips=20, Reset_Alert_Pips=30
 Dashboard_Corner=DASH_TOP_LEFT, Dashboard_Font_Size=9, Label_Font_Size=8
@@ -917,6 +933,9 @@ int scan_bars = first_run ? g_initial_bars_to_scan : g_swing_lookback*2+5;
 int prev_rp_count = g_rp_count;
 DetectSwingPoints(scan_bars);  first_run = false;
 
+// STEP 4b: FVG Detection (P34)
+DetectFVG(scan_bars);
+
 // STEP 5: Breakout & Retest
 CheckBreakoutsAndRetests();
 
@@ -965,27 +984,27 @@ REASON_CHARTCHANGE/RECOMPILE/REMOVE → full reset
 === OnChartEvent === CHARTEVENT_CHART_CHANGE → RepositionDashboard + UpdateFontSizes
 === OnTimer === Flash toggle, decrement flash_count
 
-=== TF PRESET TABLE (v3.2: added M15) ===
+=== TF PRESET TABLE (v3.3: H1 optimized for clean premium zones) ===
 Param                    M15    M30    H1    H4     D1
-Swing_Lookback            7      5     4      3      3
-Min_RP_Distance_Pips     15     25    20     20     40
-Min_Reaction_Move_Pips   15     12    15     20     40
+Swing_Lookback            7      5     5      3      3
+Min_RP_Distance_Pips     15     25    40     20     40
+Min_Reaction_Move_Pips   15     12    20     20     40
 Initial_Bars_To_Scan   1000    600   500    300    200
-Breakout_Confirm_Pips     2      3     5      8     15
+Breakout_Confirm_Pips     2      3     7      8     15
 Max_Retest_Bars          50     40    50     40     30
-Decay_Interval_Bars      60     15    20     25     10
-Decay_Points/Interval     1      3     2      2      3
-Max_RP_Age_Bars         500    200   300    200    100
+Decay_Interval_Bars      60     15    15     25     10
+Decay_Points/Interval     1      3     3      2      3
+Max_RP_Age_Bars         500    200   250    200    100
 SL_Buffer_Pips            2      3     5      8     15
 Entry_Buffer_Pips         1      1     2      3      5
 Max_Setup_Age_Bars       10      8    10     10      5
-Confluence_Merge_Pips    12      8    10     15     25
+Confluence_Merge_Pips    12      8    15     15     25
 HTF_Bars_To_Scan        200    200   200    150    100
 Fibo_Lookback_Bars      100     80   100    100     60
 Fibo_Tolerance_Pips       4      3     5      8     12
-Min_Candle_Size_Pips      3      2     3      5     10
+Min_Candle_Size_Pips      3      2     5      5     10
 Zone_Width_Pips           3      3     4      6     10
-Min_Score_To_Show        55     50    40     40     35
+Min_Score_To_Show        55     50    80     40     35
 Proximity_Alert_Pips     12     15    20     30     50
 Reset_Alert_Pips         18     20    30     40     60
 Structure_Lookback       50     30    50     50     80
@@ -1071,14 +1090,69 @@ Functions: InitLogger, DeinitLogger, LogZoneCreated, LogZoneTest, LogZoneBroken,
 
 ---
 
-### P31: FVG / Imbalance Detection (tạo RP_FVG.mqh)
+### P34: RP_FVG.mqh — Fair Value Gap Detection (v3.3)
 
 ```
-FVG = khoảng trống giữa high[i+1] và low[i-1] (3-candle pattern)
-- DetectFVG(): scan bars tìm FVG (gap > 0.5×ATR)
-- IsFVGNearZone(): check FVG trong ±2×zone_width
-- RefineZoneWithFVG(): adjust zone_high/zone_low theo FVG edge
-- Scoring: FVG unfilled trùng zone → +8
+FVG = khoảng trống giữa high[i+1] và low[i-1] (3-candle pattern).
+Zone overlap với FVG = institutional imbalance → tăng accuracy.
+
+=== DATA STRUCTURES ===
+#define MAX_FVG_COUNT 50
+SFVG { double high, low; datetime time_formed; int bar_formed;
+       bool is_bullish, is_filled, is_active; }
+SFVG g_fvg_array[MAX_FVG_COUNT];  int g_fvg_count = 0;
+
+=== FUNCTIONS ===
+
+1. DetectFVG(bars_to_scan): scan bar[2..limit] (anti-repainting)
+   - Bullish FVG: high[i+1] < low[i-1] → gap = [high[i+1], low[i-1]]
+   - Bearish FVG: low[i+1] > high[i-1] → gap = [high[i-1], low[i+1]]
+   - Min gap size: 0.30 × ATR14 (filter micro-gaps)
+   - Gọi AddFVG() + CheckFVGFilled()
+
+2. AddFVG(gap_low, gap_high, bar_idx, is_bullish):
+   - Duplicate check by time_formed + direction
+   - Eviction: inactive first → oldest active
+
+3. CheckFVGFilled(): mỗi bar, check bar[1]
+   - Bullish FVG filled: low[1] <= gap_low
+   - Bearish FVG filled: high[1] >= gap_high
+   - Filled → is_active=false
+
+4. CheckZoneFVGOverlap(rp_index): bool
+   - Check zone[high,low] vs tất cả active FVG
+   - Overlap → set rp.has_fvg=true, rp.has_fvg_bullish
+   - Gọi trong CalcFinalScore (trước scoring aggregation)
+
+5. CalcFVGBonus(rp_index): [0, +15]
+   - Aligned (SUPPORT+bullish FVG / RESISTANCE+bearish FVG): +15
+   - Misaligned (still institutional imbalance): +5
+   - No FVG: 0
+
+Integration: RP_Main.mq5 STEP 4b: DetectFVG(scan_bars) SAU DetectSwingPoints
+Include order: RP_FVG trước RP_Confluence (FVG data cần trước scoring)
+```
+
+---
+
+### P35: Multi-Touch Mitigation (sửa RP_Scoring.mqh CalcTestQualityScore)
+
+```
+ICT Concept: mỗi touch DRAIN liquidity từ zone. Zone mạnh nhất khi chưa test hoặc test 1 lần.
+Thay thế scoring tăng dần (v3.2) bằng mitigation-aware curve.
+
+CalcTestQualityScore(rp_index): [-15, +12]
+  weighted = strong_test_count × 1.0 + weak_test_count × 0.5
+
+  | Weighted | Score | Lý do |
+  |----------|-------|-------|
+  | < 0.1    | +10   | Fresh premium — untested supply/demand |
+  | < 1.5    | +12   | Confirmed — zone validated by price action |
+  | < 2.5    | +5    | Depleting — liquidity draining |
+  | 3+       | 5 - (excess×5), floor -15 | Mitigated — zone likely exhausted |
+
+Impact: Zone 3+ test bị penalty → ít zone cũ/yếu hiển thị → chart sạch hơn.
+First touch bonus (+10 trong CalcFinalScore cũ) đã tích hợp vào weighted<0.1 case.
 ```
 
 ---
@@ -1177,7 +1251,7 @@ OnInit: thêm `InitRPIDMap()` sau ArrayResize.
 | 4 | Drawing | Label di chuyển sang bên phải zone (+21 bars, ANCHOR_LEFT) | **LOW**: UI sạch hơn |
 | 5 | Drawing | Xóa "Tested:Nx" khỏi label → format: `PRE \| TYPE SCORE \| TF \| Status` | **LOW**: label ngắn gọn |
 | 6 | Drawing | Level icon: PREMIUM → "PRE" | **LOW**: compact |
-| 7 | Drawing | **Level filter**: input Show_Min_Level (default RP_PREMIUM), zones dưới level bị ẩn | **HIGH**: chỉ hiện zone uy tín |
+| 7 | Drawing | **Level toggle**: 4 inputs Show_Premium/Level1/Level2/Level3 + IsLevelVisible() | **HIGH**: bật/tắt từng level riêng |
 | 8 | Drawing | g_prev_types[] thêm ArrayInitialize(RP_SUPPORT) | **LOW**: tránh unnecessary redraw frame đầu |
 
 #### M15 Preset & Lower TF Accuracy
@@ -1214,6 +1288,40 @@ HTF Nesting Bonus chi tiết:
 
 ---
 
+### v3.3.0 — FVG Detection + Multi-Touch Mitigation + Zone Accuracy
+
+#### New Module: RP_FVG.mqh (P34)
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 1 | RP_FVG.mqh | **DetectFVG()**: 3-candle gap detection, min 0.3×ATR, anti-repainting | **HIGH**: institutional imbalance confirmation |
+| 2 | RP_FVG.mqh | **CheckZoneFVGOverlap()**: zone↔FVG overlap check with direction alignment | **HIGH**: +15 bonus for aligned FVG |
+| 3 | RP_FVG.mqh | **CheckFVGFilled()**: auto-deactivate filled FVGs | **MEDIUM**: prevent stale FVG matches |
+| 4 | Defines | SReactionPoint: +has_fvg, +has_fvg_bullish | **LOW**: data structure |
+| 5 | Main | STEP 4b: DetectFVG(scan_bars) after swing detection | **HIGH**: FVG data ready for scoring |
+| 6 | Scoring | CalcFinalScore: +CalcFVGBonus() [0, +15] + FVG flag sync fix | **HIGH**: FVG-confirmed zones score higher |
+
+#### Multi-Touch Mitigation (P35)
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 7 | Scoring | **CalcTestQualityScore rewrite**: mitigation-aware curve [-15, +12] | **CRITICAL**: 3+ touch zones penalized |
+| 8 | Scoring | Fresh zone premium (+10) built into test score, removed duplicate from CalcFinalScore | **MEDIUM**: cleaner scoring logic |
+
+#### Zone Quality & Display
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 9 | Drawing | **Level toggles**: Show_Premium/Level1/Level2/Level3 inputs replace dropdown | **HIGH**: independent level control |
+| 10 | Utils | **IsLevelVisible()**: check level toggle state | **MEDIUM**: clean filter API |
+| 11 | Drawing | **Overlap margin**: ATR×0.5 → ATR×0.8, same-type: ATR×1.2 | **HIGH**: fewer overlapping zones |
+| 12 | Detection | **ATR-adaptive proximity**: max(fixed_pips, ATR×mult) M15/M30=0.4, H1+=0.6 | **HIGH**: volatility-aware spacing |
+| 13 | Detection | **Zone replacement**: new zone with 1.5× reaction replaces weak nearby zone | **MEDIUM**: better zone selection |
+| 14 | Detection | **H1 ATR width cap**: 0.7 → 0.55 (thinner zones) | **MEDIUM**: cleaner chart |
+| 15 | Main | **H1 preset optimized**: swing=5, dist=40, reaction=20, decay=15/3, score=80 | **HIGH**: premium-only H1 zones |
+
+---
+
 ## THỨ TỰ THỰC THI
 
 ```
@@ -1224,7 +1332,7 @@ PHASE 4: P11, P12, P13
 PHASE 5: P14, P15, P16 → compile test P1-P16
 PHASE 6: P17
 PHASE 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-PHASE 8: P29 → P30 → P31 → P32 → P33
+PHASE 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation)
 ```
 
 ---

@@ -21,6 +21,7 @@
 #include <ReactionPoint/RP_SpreadFilter.mqh>
 #include <ReactionPoint/RP_Detection.mqh>
 #include <ReactionPoint/RP_MarketStructure.mqh>
+#include <ReactionPoint/RP_FVG.mqh>
 #include <ReactionPoint/RP_Confluence.mqh>
 #include <ReactionPoint/RP_Scoring.mqh>
 #include <ReactionPoint/RP_EntrySetup.mqh>
@@ -618,6 +619,9 @@ int OnCalculate(const int rates_total,
    int prev_rp_count = g_rp_count;
    DetectSwingPoints(scan_bars);
    s_first_run = false;
+
+   //── STEP 4b: FVG Detection (P34) ──
+   DetectFVG(scan_bars);
 
    //── STEP 5: Breakout & Retest ──
    CheckBreakoutsAndRetests();
