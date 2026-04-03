@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reaction Point v3.3 — Huong Dan Su Dung</title>
+<style>
+:root {
+  --bg: #0c0f14;
+  --bg2: #111620;
+  --bg3: #161c28;
+  --border: #1e2636;
+  --text: #c0c8d8;
+  --dim: #5a6a80;
+  --blue: #3a9ed8;
+  --red: #d85050;
+  --green: #2eaa5a;
+  --amber: #d4a830;
+  --gold: #e8c840;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'Segoe UI', 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* ── Layout ── */
+.container { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+
+/* ── Header ── */
+.hero {
+  text-align: center;
+  padding: 60px 20px 40px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 40px;
+}
+.hero h1 {
+  font-size: 28px; font-weight: 700; color: #e8eef6;
+  letter-spacing: -0.5px;
+}
+.hero h1 span { color: var(--blue); }
+.hero .subtitle {
+  font-size: 14px; color: var(--dim); margin-top: 8px;
+}
+.hero .badges {
+  display: flex; justify-content: center; gap: 10px; margin-top: 16px; flex-wrap: wrap;
+}
+.badge {
+  display: inline-block; padding: 3px 12px; border-radius: 4px;
+  font-size: 11px; font-weight: 600;
+}
+.badge-blue { background: rgba(58,158,216,0.12); color: var(--blue); border: 1px solid rgba(58,158,216,0.25); }
+.badge-green { background: rgba(46,170,90,0.12); color: var(--green); border: 1px solid rgba(46,170,90,0.25); }
+.badge-amber { background: rgba(212,168,48,0.12); color: var(--amber); border: 1px solid rgba(212,168,48,0.25); }
+
+/* ── TOC ── */
+.toc {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 40px;
+}
+.toc-title { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; }
+.toc a {
+  display: block; color: var(--blue); text-decoration: none;
+  padding: 4px 0; font-size: 13px;
+  transition: color 0.15s;
+}
+.toc a:hover { color: #60b8f0; }
+.toc a span { color: var(--dim); margin-right: 8px; }
+
+/* ── Sections ── */
+h2 {
+  font-size: 20px; font-weight: 700; color: #e0e8f2;
+  padding-top: 40px; margin-bottom: 20px;
+  border-top: 1px solid var(--border);
+}
+h2:first-of-type { border-top: none; padding-top: 0; }
+h3 {
+  font-size: 15px; font-weight: 600; color: #c8d0e0;
+  margin-top: 28px; margin-bottom: 12px;
+}
+h4 {
+  font-size: 13px; font-weight: 600; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 1px;
+  margin-top: 20px; margin-bottom: 10px;
+}
+p { margin-bottom: 12px; }
+ul, ol { margin: 0 0 16px 20px; }
+li { margin-bottom: 4px; }
+strong { color: #d8e0ec; }
+
+/* ── Tables ── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 20px;
+  font-size: 13px;
+}
+th {
+  background: var(--bg3);
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(30,38,54,0.6);
+  vertical-align: top;
+}
+tr:hover td { background: rgba(58,158,216,0.04); }
+.td-blue { color: var(--blue); font-weight: 600; }
+.td-red { color: var(--red); font-weight: 600; }
+.td-green { color: var(--green); font-weight: 600; }
+.td-amber { color: var(--amber); font-weight: 600; }
+.td-dim { color: var(--dim); }
+
+/* ── Code blocks ── */
+pre {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin: 12px 0 20px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  color: #a0b0c4;
+}
+code {
+  background: var(--bg3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--blue);
+}
+
+/* ── Info boxes ── */
+.info-box {
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin: 16px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.info-tip {
+  background: rgba(46,170,90,0.08);
+  border-left: 3px solid var(--green);
+}
+.info-warn {
+  background: rgba(212,168,48,0.08);
+  border-left: 3px solid var(--amber);
+}
+.info-danger {
+  background: rgba(216,80,80,0.08);
+  border-left: 3px solid var(--red);
+}
+.info-box strong { color: inherit; }
+
+/* ── Zone demo ── */
+.zone-demo {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  margin: 16px 0;
+}
+.zone-demo svg { width: 100%; height: auto; }
+
+/* ── Flow diagram ── */
+.flow {
+  display: flex; flex-direction: column; gap: 0;
+  margin: 16px 0 20px;
+}
+.flow-step {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 10px 0;
+}
+.flow-num {
+  flex-shrink: 0; width: 28px; height: 28px;
+  background: rgba(58,158,216,0.12);
+  border: 1px solid rgba(58,158,216,0.3);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--blue);
+}
+.flow-content { flex: 1; }
+.flow-title { font-weight: 600; color: #c8d4e4; font-size: 13px; }
+.flow-desc { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.flow-arrow {
+  width: 28px; display: flex; justify-content: center;
+  color: var(--border); font-size: 10px; padding: 2px 0;
+}
+
+/* ── Tags ── */
+.tag {
+  display: inline-block; padding: 1px 8px; border-radius: 3px;
+  font-size: 11px; font-weight: 600;
+}
+.tag-fvg { background: rgba(58,158,216,0.12); color: var(--blue); }
+.tag-bb { background: rgba(212,168,48,0.12); color: var(--amber); }
+.tag-rr { background: rgba(180,140,60,0.12); color: #c8a830; }
+.tag-c { background: rgba(140,120,180,0.12); color: #a090c8; }
+.tag-fresh { background: rgba(46,170,90,0.10); color: var(--green); }
+
+/* ── Rank cards ── */
+.rank-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 20px; }
+.rank-card {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 14px;
+}
+.rank-num {
+  font-size: 18px; font-weight: 800; min-width: 28px; text-align: center;
+}
+.rank-info { flex: 1; }
+.rank-title { font-weight: 600; font-size: 13px; }
+.rank-desc { font-size: 11px; color: var(--dim); margin-top: 2px; }
+.rank-rate { font-weight: 700; font-size: 13px; }
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .container { padding: 20px 14px 60px; }
+  .hero { padding: 40px 10px 30px; }
+  h2 { font-size: 18px; }
+  table { font-size: 12px; }
+  th, td { padding: 6px 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- ═══ HERO ═══ -->
+<div class="hero">
+  <h1>Reaction Point <span>v3.3</span></h1>
+  <div class="subtitle">Institutional Zone Detection &middot; 22-Factor Scoring &middot; Multi-TF Confluence</div>
+  <div class="badges">
+    <span class="badge badge-blue">19 Files</span>
+    <span class="badge badge-green">No Repainting</span>
+    <span class="badge badge-amber">Score Cap 200</span>
+  </div>
+</div>
+
+<!-- ═══ TOC ═══ -->
+<div class="toc">
+  <div class="toc-title">Muc Luc</div>
+  <a href="#logic"><span>01</span> Logic Hoat Dong</a>
+  <a href="#scoring"><span>02</span> He Thong Scoring (22 Yeu To)</a>
+  <a href="#ui"><span>03</span> Thong So UI Tren Chart</a>
+  <a href="#trade"><span>04</span> Cach Trade Hieu Qua Nhat</a>
+  <a href="#preset"><span>05</span> Preset Theo Khung Thoi Gian</a>
+  <a href="#input"><span>06</span> Input Quan Trong</a>
+  <a href="#setup"><span>07</span> Cai Dat &amp; Xu Ly Su Co</a>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="logic">01. Logic Hoat Dong</h2>
+
+<h3>Zone la gi?</h3>
+<p>Zone = <strong>vung gia co xac suat cao gia se phan ung</strong> (bat len hoac bat xuong). Indicator phat hien zone tu 3 nguon:</p>
+<ul>
+  <li><strong>Swing Point</strong> — dinh/day duoc xac nhan boi N nen moi ben</li>
+  <li><strong>Order Block (OB)</strong> — nen institutional cuoi cung truoc impulse move</li>
+  <li><strong>Wick Filter</strong> — thu hep zone vao vung liquidity grab</li>
+</ul>
+
+<h3>Chuoi Loc 7 Tang</h3>
+<p>Tu hang tram swing point, chi 3-6 zone Premium hien thi tren chart:</p>
+
+<div class="flow">
+  <div class="flow-step">
+    <div class="flow-num">1</div>
+    <div class="flow-content">
+      <div class="flow-title">Swing Detection</div>
+      <div class="flow-desc">Chi lay swing co N nen trai + N nen phai xac nhan (H1: N=5)</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">2</div>
+    <div class="flow-content">
+      <div class="flow-title">Momentum Confirmation</div>
+      <div class="flow-desc">Gia phai di chuyen >= 20 pips (H1) sau swing — chung minh co reaction</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">3</div>
+    <div class="flow-content">
+      <div class="flow-title">ATR-Adaptive Proximity</div>
+      <div class="flow-desc">Zone moi phai cach zone cu >= max(40 pips, ATR &times; 0.6). Zone manh hon 1.5x thay the zone yeu.</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">4</div>
+    <div class="flow-content">
+      <div class="flow-title">Zone Creation</div>
+      <div class="flow-desc">OB detection &rarr; wick filter &rarr; ATR width cap (H1: 0.55&times;ATR) &rarr; FVG check &rarr; Imbalance check</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">5</div>
+    <div class="flow-content">
+      <div class="flow-title">Scoring (22 yeu to, 0-200 diem)</div>
+      <div class="flow-desc">Chi zone Premium (&ge;120) hien thi mac dinh</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">6</div>
+    <div class="flow-content">
+      <div class="flow-title">Overlap Suppression</div>
+      <div class="flow-desc">Zone chong cheo trong ATR&times;0.8 &rarr; giu zone manh nhat. Cung loai (2 support) &rarr; margin &times;1.5</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">|</div></div>
+  <div class="flow-step">
+    <div class="flow-num">7</div>
+    <div class="flow-content">
+      <div class="flow-title">Level Toggle Filter</div>
+      <div class="flow-desc">Mac dinh chi hien Premium. Bat them level neu can.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="scoring">02. He Thong Scoring</h2>
+
+<h4>Base Score (0-100)</h4>
+<table>
+  <tr><th>#</th><th>Yeu to</th><th>Diem</th><th>Mo ta</th></tr>
+  <tr><td>1</td><td><strong>Reaction Strength</strong></td><td class="td-blue">max 35</td><td>reaction_pips / ATR_smooth &times; 35</td></tr>
+  <tr><td>2</td><td><strong>Test Quality (Mitigation)</strong></td><td>-15 to +12</td><td>Fresh +10, test 1 <span class="td-green">+12</span>, test 2 +5, test 3+ <span class="td-red">penalty</span></td></tr>
+  <tr><td>3</td><td><strong>Candle Pattern</strong></td><td>max 12</td><td>Pinbar 12, Engulfing 10, Outside 8, Wick 6</td></tr>
+  <tr><td>4</td><td><strong>Fibonacci</strong></td><td>max 13</td><td>61.8% +10, 78.6% +8, 50% +7, 38.2% +4</td></tr>
+  <tr><td>5</td><td><strong>Volume</strong></td><td>max 15</td><td>vol/MA20: >2x +15, >1.5x +12, >1.2x +8</td></tr>
+  <tr><td>6</td><td><strong>Round Number</strong></td><td>max 8</td><td>Gan .000 +8, gan .500 +5</td></tr>
+  <tr><td>7</td><td><strong>Volume Delta</strong></td><td>&plusmn;5</td><td>Bullish tai support +5, bearish -5</td></tr>
+  <tr><td>8</td><td><strong>Zone Precision</strong></td><td>-5 to +13</td><td>Zone hep +5, rong -5, refined +5</td></tr>
+  <tr><td>9</td><td><strong>Imbalance Candle</strong></td><td class="td-amber">+8</td><td>Body &ge;70% range + vol >1.5&times;MA20</td></tr>
+</table>
+
+<h4>Final Adjustments (len toi +200)</h4>
+<table>
+  <tr><th>Module</th><th>Diem</th><th>Logic</th></tr>
+  <tr><td>Regime Filter (ADX)</td><td>-30 to +20</td><td>Cung trend +20, nguoc -30, choppy -20</td></tr>
+  <tr><td>Decay Penalty</td><td>0 to -35</td><td>Zone cu mat diem theo thoi gian</td></tr>
+  <tr><td>Recent Bonus</td><td>0 to +15</td><td>Phan ung trong 5 bar +15</td></tr>
+  <tr><td>Session + DoW</td><td>-30 to +20</td><td>Overlap +15, Dead -20, Friday pm -10</td></tr>
+  <tr><td>Structure (BOS/CHoCH)</td><td>-20 to +35</td><td>Cung BOS +15, Sweep +20</td></tr>
+  <tr><td>Trend Alignment (3 TF)</td><td>-25 to +20</td><td>3 TF dong huong +20</td></tr>
+  <tr><td>HTF Nesting</td><td class="td-blue">0 to +30</td><td>Zone xac nhan boi H4+D1 +30</td></tr>
+  <tr><td>FVG Bonus</td><td class="td-blue">0 to +15</td><td>Overlap voi Fair Value Gap</td></tr>
+  <tr><td>Role Reversal</td><td class="td-amber">+15</td><td>Support &rarr; Resistance (hoac nguoc lai)</td></tr>
+  <tr><td>Breaker Block</td><td class="td-amber">+10</td><td>OB bi pha boi impulse + retest</td></tr>
+  <tr><td>Confluence</td><td class="td-green">&times;1.8 + 40</td><td>4+ RP tu nhieu TF</td></tr>
+</table>
+
+<h4>Phan cap Zone</h4>
+<table>
+  <tr><th>Level</th><th>Score</th><th>Mac dinh</th><th>Mo ta</th></tr>
+  <tr><td class="td-amber"><strong>PREMIUM</strong></td><td>&ge; 120</td><td><span class="tag tag-fresh">ON</span></td><td>Zone cuc manh — chi loai nay hien mac dinh</td></tr>
+  <tr><td>LEVEL 1</td><td>85-119</td><td class="td-dim">OFF</td><td>Zone manh</td></tr>
+  <tr><td>LEVEL 2</td><td>60-84</td><td class="td-dim">OFF</td><td>Zone trung binh</td></tr>
+  <tr><td>LEVEL 3</td><td>40-59</td><td class="td-dim">OFF</td><td>Zone yeu</td></tr>
+</table>
+
+<h3>Multi-Touch Mitigation</h3>
+<div class="info-box info-warn">
+  <strong>ICT concept:</strong> Moi lan gia test zone, liquidity giam dan. Zone manh nhat khi chua test hoac chi test 1 lan.
+</div>
+<table>
+  <tr><th>Lan test</th><th>Diem</th><th>Y nghia</th></tr>
+  <tr><td>Chua test (Fresh)</td><td class="td-green">+10</td><td>Chua ai "an" liquidity — zone manh nhat</td></tr>
+  <tr><td>Test 1 lan</td><td class="td-green"><strong>+12</strong></td><td>Zone xac nhan — tin hieu tot nhat</td></tr>
+  <tr><td>Test 2 lan</td><td>+5</td><td>Zone con hieu luc nhung dang yeu</td></tr>
+  <tr><td>Test 3+ lan</td><td class="td-red">-5 moi lan</td><td>Zone bi "an het" — nen tranh</td></tr>
+</table>
+
+<h3>FVG (Fair Value Gap)</h3>
+<p>FVG = khoang trong gia giua 3 nen (institutional imbalance). Zone overlap voi FVG cung huong: <strong class="td-blue">+15 diem</strong>. Nguoc huong: +5.</p>
+
+<h3>Breaker Block</h3>
+<p>OB bi pha boi impulse (body &ge; 0.8&times;ATR), sau do retest tu phia doi dien: <strong class="td-amber">+25 tong</strong> (15 reversal + 10 breaker).</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="ui">03. Thong So UI Tren Chart</h2>
+
+<h3>Zone Design</h3>
+<div class="zone-demo">
+  <svg viewBox="0 0 700 140">
+    <!-- Supply zone -->
+    <rect x="20" y="10" width="660" height="24" fill="rgba(220,80,80,0.12)"/>
+    <line x1="20" y1="10" x2="680" y2="10" stroke="rgba(220,80,80,0.55)" stroke-width="2"/>
+    <line x1="20" y1="34" x2="680" y2="34" stroke="rgba(220,80,80,0.55)" stroke-width="2"/>
+    <text x="620" y="26" font-family="Arial" font-weight="700" font-size="12" fill="rgba(220,80,80,0.85)">R 142 BB</text>
+
+    <!-- Gap -->
+
+    <!-- Demand zone -->
+    <rect x="20" y="58" width="660" height="24" fill="rgba(50,160,220,0.12)"/>
+    <line x1="20" y1="58" x2="680" y2="58" stroke="rgba(50,160,220,0.55)" stroke-width="2"/>
+    <line x1="20" y1="82" x2="680" y2="82" stroke="rgba(50,160,220,0.55)" stroke-width="2"/>
+    <text x="612" y="74" font-family="Arial" font-weight="700" font-size="12" fill="rgba(50,160,220,0.85)">S 156 FVG</text>
+
+    <!-- Reversal zone -->
+    <rect x="20" y="106" width="660" height="24" fill="rgba(180,140,60,0.10)"/>
+    <line x1="20" y1="106" x2="680" y2="106" stroke="rgba(180,140,60,0.50)" stroke-width="2"/>
+    <line x1="20" y1="130" x2="680" y2="130" stroke="rgba(180,140,60,0.50)" stroke-width="2"/>
+    <text x="620" y="122" font-family="Arial" font-weight="700" font-size="12" fill="rgba(180,140,60,0.85)">S 148 RR</text>
+  </svg>
+</div>
+
+<table>
+  <tr><th>Mau</th><th>Loai</th><th>Y nghia</th></tr>
+  <tr><td style="color:var(--blue);">&#9632; Blue</td><td><strong>Demand / Support</strong></td><td>Gia co xu huong bat len</td></tr>
+  <tr><td style="color:var(--red);">&#9632; Red</td><td><strong>Supply / Resistance</strong></td><td>Gia co xu huong bat xuong</td></tr>
+  <tr><td style="color:var(--amber);">&#9632; Amber</td><td><strong>Role Reversal / Breaker</strong></td><td>Zone doi vai tro</td></tr>
+</table>
+
+<h3>Label Format</h3>
+<p>Format: <code>[S/R] [Score] [Tag]</code></p>
+<table>
+  <tr><th>Vi du</th><th>Y nghia</th></tr>
+  <tr><td><code>S 156 FVG</code></td><td>Support 156 diem, co Fair Value Gap <span class="tag tag-fvg">FVG</span></td></tr>
+  <tr><td><code>R 142 BB</code></td><td>Resistance 142 diem, Breaker Block <span class="tag tag-bb">BB</span></td></tr>
+  <tr><td><code>S 148 RR</code></td><td>Support 148 diem, Role Reversal <span class="tag tag-rr">RR</span></td></tr>
+  <tr><td><code>R 128 C</code></td><td>Resistance 128 diem, Confluence <span class="tag tag-c">C</span></td></tr>
+  <tr><td><code>S 134</code></td><td>Support 134 diem, zone Premium binh thuong</td></tr>
+</table>
+
+<h3>Visual Specs</h3>
+<table>
+  <tr><th>Thuoc tinh</th><th>Gia tri</th><th>Ly do</th></tr>
+  <tr><td>Fill opacity</td><td>45% (Premium)</td><td>Nhe — khong che nen</td></tr>
+  <tr><td>Edge width</td><td>2px</td><td>Sac net, khong qua day</td></tr>
+  <tr><td>Zone length</td><td>Max 100 bars</td><td>Khong keo qua khu xa</td></tr>
+  <tr><td>Glow</td><td>Tat (Premium-only mode)</td><td>Giam noise</td></tr>
+  <tr><td>Font</td><td>Arial Bold 9pt</td><td>De doc</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="trade">04. Cach Trade Hieu Qua Nhat</h2>
+
+<h3>Workflow Top-Down</h3>
+<div class="flow">
+  <div class="flow-step">
+    <div class="flow-num">H4</div>
+    <div class="flow-content">
+      <div class="flow-title">Xac dinh vung gia lon</div>
+      <div class="flow-desc">Mo H4 &rarr; nhin zone Premium &rarr; xac dinh S/R chinh &rarr; ghi nhan huong trend</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">&darr;</div></div>
+  <div class="flow-step">
+    <div class="flow-num">H1</div>
+    <div class="flow-content">
+      <div class="flow-title">Tim zone entry</div>
+      <div class="flow-desc">Chuyen H1 &rarr; tim zone Premium co HTF nesting (score >140) &rarr; zone gan gia hien tai</div>
+    </div>
+  </div>
+  <div class="flow-step"><div class="flow-arrow">&darr;</div></div>
+  <div class="flow-step">
+    <div class="flow-num">M15</div>
+    <div class="flow-content">
+      <div class="flow-title">Entry chinh xac</div>
+      <div class="flow-desc">Cho gia den zone &rarr; cho pattern xac nhan (pinbar/engulfing) &rarr; vao lenh khi co tag FVG hoac BB</div>
+    </div>
+  </div>
+</div>
+
+<h3>Xep Hang Zone (Manh &rarr; Yeu)</h3>
+<div class="rank-list">
+  <div class="rank-card">
+    <div class="rank-num td-green">1</div>
+    <div class="rank-info">
+      <div class="rank-title">Premium + Confluence + FVG + HTF</div>
+      <div class="rank-desc">Score 160-200 &middot; <span class="tag tag-fvg">FVG</span> <span class="tag tag-c">C</span></div>
+    </div>
+    <div class="rank-rate td-green">85-92%</div>
+  </div>
+  <div class="rank-card">
+    <div class="rank-num td-amber">2</div>
+    <div class="rank-info">
+      <div class="rank-title">Premium + Breaker Block</div>
+      <div class="rank-desc">Score 140-170 &middot; <span class="tag tag-bb">BB</span></div>
+    </div>
+    <div class="rank-rate td-amber">83-90%</div>
+  </div>
+  <div class="rank-card">
+    <div class="rank-num td-blue">3</div>
+    <div class="rank-info">
+      <div class="rank-title">Premium + FVG</div>
+      <div class="rank-desc">Score 135-165 &middot; <span class="tag tag-fvg">FVG</span></div>
+    </div>
+    <div class="rank-rate td-blue">80-88%</div>
+  </div>
+  <div class="rank-card">
+    <div class="rank-num" style="color:#8a96a8;">4</div>
+    <div class="rank-info">
+      <div class="rank-title">Premium + Role Reversal</div>
+      <div class="rank-desc">Score 135-160 &middot; <span class="tag tag-rr">RR</span></div>
+    </div>
+    <div class="rank-rate" style="color:#8a96a8;">78-85%</div>
+  </div>
+  <div class="rank-card">
+    <div class="rank-num td-dim">5</div>
+    <div class="rank-info">
+      <div class="rank-title">Premium standard</div>
+      <div class="rank-desc">Score 120-140</div>
+    </div>
+    <div class="rank-rate td-dim">75-82%</div>
+  </div>
+</div>
+
+<h3>Entry Rules</h3>
+
+<div class="info-box info-tip">
+  <strong>BUY tai zone Demand (Blue):</strong><br>
+  1. Gia cham zone &rarr; 2. Cho nen dong trong zone &rarr; 3. Pattern xac nhan &rarr; 4. SL = zone_low - 5 pips &rarr; 5. TP1 = zone Supply gan nhat &rarr; 6. R:R &ge; 1:1.5
+</div>
+
+<div class="info-box info-danger">
+  <strong>SELL tai zone Supply (Red):</strong><br>
+  1. Gia cham zone &rarr; 2. Cho nen dong trong zone &rarr; 3. Pattern xac nhan &rarr; 4. SL = zone_high + 5 pips &rarr; 5. TP1 = zone Demand gan nhat &rarr; 6. R:R &ge; 1:1.5
+</div>
+
+<h3>Quan Ly Lenh</h3>
+<table>
+  <tr><th>Giai doan</th><th>Hanh dong</th></tr>
+  <tr><td>Dat TP1</td><td>Chot 50% &rarr; doi SL ve entry (hoa von)</td></tr>
+  <tr><td>Dat TP2</td><td>Chot 50% con lai</td></tr>
+  <tr><td>Zone bi pha</td><td>Cat lenh &rarr; cho Breaker Block (BB) &rarr; vao lenh huong moi</td></tr>
+</table>
+
+<h3>Khi Nao KHONG Trade</h3>
+<div class="info-box info-danger">
+  <strong>Tranh:</strong> Choppy regime &middot; Dead Zone session &middot; News blackout &middot; Spread cao &middot; Zone test 3+ lan &middot; Zone nguoc trend manh (ADX >25)
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="preset">05. Preset Theo TF</h2>
+
+<table>
+  <tr><th>Param</th><th>M15</th><th>M30</th><th>H1</th><th>H4</th><th>D1</th></tr>
+  <tr><td>Swing</td><td>5</td><td>5</td><td>5</td><td>4</td><td>3</td></tr>
+  <tr><td>Distance</td><td>20</td><td>25</td><td>40</td><td>50</td><td>40</td></tr>
+  <tr><td>Reaction</td><td>15</td><td>12</td><td>20</td><td>25</td><td>40</td></tr>
+  <tr><td>Decay</td><td>30/2</td><td>15/3</td><td>15/3</td><td>15/3</td><td>10/3</td></tr>
+  <tr><td>Max Age</td><td>300</td><td>200</td><td>250</td><td>180</td><td>100</td></tr>
+  <tr><td>Score Min</td><td>75</td><td>50</td><td class="td-blue">80</td><td class="td-blue">80</td><td>35</td></tr>
+  <tr><td>HTF 1/2</td><td>H1/H4</td><td>H1/H4</td><td>H4/D1</td><td>D1/W1</td><td>W1/MN</td></tr>
+</table>
+
+<div class="info-box info-tip">
+  <strong>M15</strong> = Entry TF (decay nhanh, chi zone fresh)<br>
+  <strong>H1</strong> = Core TF (zone Premium clean, khoang cach rong)<br>
+  <strong>H4</strong> = Bias TF (zone lon, spacing 50+ pips)
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="input">06. Input Quan Trong</h2>
+
+<h3>Level Toggles</h3>
+<table>
+  <tr><th>Input</th><th>Default</th><th>Mo ta</th></tr>
+  <tr><td><code>Show_Premium</code></td><td class="td-green"><strong>ON</strong></td><td>Zone Premium (&ge;120)</td></tr>
+  <tr><td><code>Show_Level1</code></td><td class="td-dim">OFF</td><td>Zone Level 1 (85-119)</td></tr>
+  <tr><td><code>Show_Level2</code></td><td class="td-dim">OFF</td><td>Zone Level 2 (60-84)</td></tr>
+  <tr><td><code>Show_Level3</code></td><td class="td-dim">OFF</td><td>Zone Level 3 (40-59)</td></tr>
+</table>
+
+<h3>Module Toggles</h3>
+<table>
+  <tr><th>Input</th><th>Default</th><th>Tat = ?</th></tr>
+  <tr><td><code>Use_Regime_Filter</code></td><td>ON</td><td>Khong dieu chinh theo trend</td></tr>
+  <tr><td><code>Use_Dynamic_Score</code></td><td>ON</td><td>Zone khong mat diem theo thoi gian</td></tr>
+  <tr><td><code>Use_Confluence_Zones</code></td><td>ON</td><td>Khong gop zone tu nhieu TF</td></tr>
+  <tr><td><code>Use_Market_Structure</code></td><td>ON</td><td>Khong co BOS/CHoCH</td></tr>
+  <tr><td><code>Use_News_Filter</code></td><td>ON</td><td>Khong loc tin tuc</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2 id="setup">07. Cai Dat &amp; Xu Ly Su Co</h2>
+
+<h3>Cai Dat</h3>
+<ol>
+  <li>Copy <code>MQL5/Indicators/ReactionPoint/</code> va <code>MQL5/Include/ReactionPoint/</code> vao MT5 Data Folder</li>
+  <li>MetaEditor (F4) &rarr; Compile <code>RP_Main.mq5</code> (F7)</li>
+  <li>Navigator (Ctrl+N) &rarr; keo <strong>RP_Main</strong> vao chart</li>
+  <li>TF_Preset = <strong>AUTO</strong> &rarr; OK</li>
+</ol>
+
+<h3>Xu Ly Su Co</h3>
+<table>
+  <tr><th>Van de</th><th>Giai phap</th></tr>
+  <tr><td>Khong thay zone</td><td>Tang <code>Initial_Bars_To_Scan</code>, giam <code>Min_Score_To_Show</code></td></tr>
+  <tr><td>Zone qua nhieu</td><td>Chi <code>Show_Premium</code>, tang <code>Min_RP_Distance</code></td></tr>
+  <tr><td>Zone chong cheo</td><td>Tang <code>Confluence_Merge_Pips</code></td></tr>
+  <tr><td>Canh bao khong hoat dong</td><td>Check session (Dead Zone?), check News filter</td></tr>
+  <tr><td>Chay cham</td><td>Giam <code>Initial_Bars_To_Scan</code> va <code>HTF_Bars_To_Scan</code></td></tr>
+</table>
+
+<h3>FAQ</h3>
+<table>
+  <tr><th>Cau hoi</th><th>Tra loi</th></tr>
+  <tr><td>Co repaint khong?</td><td><strong>Khong.</strong> Chi dung bar[1]+ (da dong)</td></tr>
+  <tr><td>TF nao tot nhat?</td><td>H1 intraday, H4 swing. M15 tinh chinh entry</td></tr>
+  <tr><td>Score bao nhieu la tot?</td><td>Premium &ge;120. Zone 150+ cuc ky dang tin</td></tr>
+  <tr><td>Zone test 3+ co nen trade?</td><td><strong>Khong.</strong> Liquidity da can — nen tranh</td></tr>
+  <tr><td>Breaker Block la gi?</td><td>OB bi pha boi impulse, retest tu phia doi dien. Win rate cao</td></tr>
+  <tr><td>FVG la gi?</td><td>Khoang trong gia 3 nen = institutional imbalance. Zone +15 diem</td></tr>
+</table>
+
+<div style="text-align:center; margin-top:40px; padding-top:20px; border-top:1px solid var(--border); color:var(--dim); font-size:12px;">
+  Reaction Point v3.3 &middot; 19 Files &middot; 22-Factor Scoring &middot; Score Cap 200 &middot; No Repainting
+</div>
+
+</div>
+</body>
+</html>
