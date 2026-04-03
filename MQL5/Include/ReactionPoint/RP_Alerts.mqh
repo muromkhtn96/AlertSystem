@@ -191,6 +191,7 @@ void CheckAllAlerts()
 {
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
       if(!g_rp_array[i].is_active) continue;
 
       //--- Reset alerts if price moved far away

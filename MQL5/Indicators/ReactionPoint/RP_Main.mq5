@@ -595,6 +595,7 @@ int OnCalculate(const int rates_total,
    }
 
    //── STEP 1: Market Context ──
+   DetectUTCOffset();          // DST-aware UTC offset auto-detection
    UpdateCurrentSession();
    UpdateMarketRegime();
    if(g_use_trend_alignment)
@@ -627,30 +628,51 @@ int OnCalculate(const int rates_total,
    CheckBreakoutsAndRetests();
 
    //── STEP 6: Scoring — only dirty RPs ──
-   //--- Mark newly created RPs as dirty
+   //--- Mark newly created RPs as dirty (bounds-checked)
    for(int i = prev_rp_count; i < g_rp_count; i++)
-      g_rp_dirty[i] = true;
+   {
+      if(SafeDirty(i))
+         g_rp_dirty[i] = true;
+   }
 
-   //--- Score dirty RPs
+   //--- Score dirty RPs (bounds-checked)
    int current_bars = Bars(_Symbol, PERIOD_CURRENT);
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
       if(!g_rp_array[i].is_active) continue;
 
       //--- Decay interval check: mark dirty periodically
-      int bars_since = current_bars - g_last_calc_bar[i];
-      if(bars_since >= g_decay_interval_bars)
-         g_rp_dirty[i] = true;
+      if(SafeDirty(i))
+      {
+         int bars_since = current_bars - g_last_calc_bar[i];
+         if(bars_since >= g_decay_interval_bars)
+            g_rp_dirty[i] = true;
 
-      if(!g_rp_dirty[i]) continue;
+         if(!g_rp_dirty[i]) continue;
+      }
 
       CalcFinalScore(i);
-      g_rp_dirty[i] = false;
-      g_last_calc_bar[i] = current_bars;
+      if(SafeDirty(i))
+      {
+         g_rp_dirty[i] = false;
+         g_last_calc_bar[i] = current_bars;
+      }
    }
 
    //--- Update opacity decay for all active RPs
    UpdateAllDecay();
+
+   //--- Periodic RP ID map rebuild (every 50 bars) to prevent stale entries
+   {
+      static int s_id_map_counter = 0;
+      s_id_map_counter++;
+      if(s_id_map_counter >= 50)
+      {
+         RebuildRPIDMap();
+         s_id_map_counter = 0;
+      }
+   }
 
    //--- P26: Check pending outcomes for reaction measurement
    CheckPendingOutcomes(Outcome_Measure_Bars);
@@ -705,9 +727,12 @@ int OnCalculate(const int rates_total,
             " bars). Rescanning...");
       s_first_run = true;
 
-      //--- Reset alert cooldowns
+      //--- Reset alert cooldowns (bounds-checked)
       for(int i = 0; i < g_rp_count; i++)
+      {
+         if(!SafeRP(i)) break;
          ArrayInitialize(g_rp_array[i].alert_sent, false);
+      }
    }
    s_last_bar_count = current_bars;
 

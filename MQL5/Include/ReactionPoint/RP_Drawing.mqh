@@ -495,9 +495,9 @@ void UpdateSessionVisibility()
       string name = OBJECT_PREFIX + "SESS_" + sessions[i];
       if(ObjectFind(0, name) < 0) continue;
 
-      //--- Apply UTC offset
-      int start_hour = sess_start_h[i] + g_utc_offset;
-      int end_hour   = sess_end_h[i] + g_utc_offset;
+      //--- Apply UTC offset (DST-aware)
+      int start_hour = sess_start_h[i] + GetEffectiveUTCOffset();
+      int end_hour   = sess_end_h[i] + GetEffectiveUTCOffset();
 
       datetime t_start = day_start + start_hour * 3600;
       datetime t_end   = day_start + end_hour * 3600;
@@ -620,6 +620,9 @@ void RedrawChangedRP()
    }
    for(int s = 0; s < g_rp_count; s++)
    {
+      if(!SafeRP(s)) break;
+      if(s >= ArraySize(g_rp_display_suppressed)) break;
+
       if(g_rp_display_suppressed[s])
          g_suppressed_count[s]++;
       else
@@ -628,7 +631,8 @@ void RedrawChangedRP()
       if(g_suppressed_count[s] >= 50 && g_rp_array[s].is_active && !g_rp_array[s].is_confluence)
       {
          g_rp_array[s].is_active = false;
-         g_rp_dirty[s] = true;
+         if(SafeDirty(s))
+            g_rp_dirty[s] = true;
          g_suppressed_count[s] = 0;
       }
    }
@@ -640,6 +644,9 @@ void RedrawChangedRP()
 
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
+      if(i >= ArraySize(g_prev_scores)) break;
+
       SReactionPoint rp = g_rp_array[i];
 
       //--- Check if state changed

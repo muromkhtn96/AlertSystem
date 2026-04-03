@@ -12,7 +12,9 @@
 // g_spread_block_multiplier from globals
 
 //--- Rolling spread buffer (100 ticks)
-double g_spread_buffer[100];
+//    g_spread_idx wraps via modulo to prevent integer overflow on long sessions
+#define SPREAD_BUF_SIZE 100
+double g_spread_buffer[SPREAD_BUF_SIZE];
 int    g_spread_idx   = 0;
 int    g_spread_count = 0;
 
@@ -32,7 +34,7 @@ double GetCurrentSpreadPips()
 //+------------------------------------------------------------------+
 double GetAverageSpread()
 {
-   int cnt = (g_spread_count < 100) ? g_spread_count : 100;
+   int cnt = (g_spread_count < SPREAD_BUF_SIZE) ? g_spread_count : SPREAD_BUF_SIZE;
    if(cnt <= 0) return 0.0;
 
    double sum = 0.0;
@@ -54,10 +56,10 @@ void UpdateSpreadFilter()
    //--- Always update spread data (even if filter is off)
    g_current_spread_pips = GetCurrentSpreadPips();
 
-   //--- Update rolling buffer
-   g_spread_buffer[g_spread_idx % 100] = g_current_spread_pips;
-   g_spread_idx++;
-   if(g_spread_count < 100) g_spread_count++;
+   //--- Update rolling buffer (modulo prevents integer overflow)
+   g_spread_buffer[g_spread_idx] = g_current_spread_pips;
+   g_spread_idx = (g_spread_idx + 1) % SPREAD_BUF_SIZE;
+   if(g_spread_count < SPREAD_BUF_SIZE) g_spread_count++;
 
    g_average_spread_pips = GetAverageSpread();
 

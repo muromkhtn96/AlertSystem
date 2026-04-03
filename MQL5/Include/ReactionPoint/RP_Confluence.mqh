@@ -166,9 +166,10 @@ void MergeClusterZones()
    int max_entries = g_rp_count + g_htf_swing_count;
    ArrayResize(entries, max_entries);
 
-   //--- Add current TF active RPs
+   //--- Add current TF active RPs (bounds-checked)
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
       if(!g_rp_array[i].is_active) continue;
       entries[total].price    = g_rp_array[i].price;
       entries[total].rp_index = i;

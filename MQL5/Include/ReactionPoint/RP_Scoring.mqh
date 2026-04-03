@@ -16,6 +16,91 @@
 //   RP_Confluence.mqh      → GetTrendAlignmentScore(ENUM_RP_TYPE)  [P20]
 
 //+------------------------------------------------------------------+
+//| SCORING WEIGHT REFERENCE TABLE                                     |
+//|                                                                    |
+//| === BASE SCORE (CalcBaseScore) — max theoretical: 100 ===          |
+//|                                                                    |
+//| Component              | Range       | Weight | Rationale          |
+//| -----------------------|-------------|--------|--------------------|
+//| Reaction Strength      | [0, +35]    | 35%    | Primary: ATR-norm  |
+//|   reaction_pips/ATR×35, capped                   institutional move |
+//| Test Quality (P25a)    | [-15, +12]  | 12%    | ICT mitigation     |
+//|   fresh=+10, 1st test=+12, 3+=penalty            liquidity drain   |
+//| Pattern Direction(P27a)| [0, +12]    | 12%    | Aligned=full       |
+//|   pinbar=12,engulf=10,OB=8,wick=6                misaligned=30%    |
+//| Fibonacci (P19)        | [0, +13]    | 13%    | 618=10,786=8       |
+//|   multi-leg bonus=+3                              500=7,382=4      |
+//| Volume (P27c)          | [0, +15]    | 15%    | Session-normalized |
+//|   >2x=15, >1.5x=12, >1.2x=8, >1x=3             vs MA20           |
+//| Round Number           | [0, +8]     |  8%    | x.x000=8, x500=5  |
+//| Volume Delta           | [-5, +5]    |  5%    | Buy/sell pressure  |
+//| Zone Precision (P27b)  | [-5, +13]   | 13%    | Width/ATR gradient |
+//|   tight=+5, refined=+5, wick=+3                  wide=-5           |
+//| Imbalance (P36)        | [0, +8]     |  8%    | Body≥70%+Vol>1.5x  |
+//| TOTAL BASE             | [-25, 100]  | capped at 100              |
+//|                                                                    |
+//| === ADJUSTMENTS (CalcFinalScore) — applied to base ===             |
+//|                                                                    |
+//| Adjustment             | Range       | Module | Rationale          |
+//| -----------------------|-------------|--------|--------------------|
+//| Regime (ADX)           | [-30, +20]  | A      | Counter=-30        |
+//| Decay Penalty          | [0, -35]    | B      | Age-based drain    |
+//| Recent Bonus           | [0, +15]    | B      | Confirmed reaction |
+//| Session                | [-20, +15]  | E      | Overlap=+15        |
+//| Day of Week            | [-10, +5]   | E      | Mon=-5,Fri PM=-10  |
+//| Structure (BOS/CHoCH)  | [-20, +15]  | H      | Aligned=+15        |
+//| Liquidity Sweep        | [0, +20]    | H      | Sweep+RP=+20       |
+//| Trend Alignment (P20)  | [-25, +20]  | D      | All TF agree=+20   |
+//| HTF Nesting            | [0, +30]    | D      | H1+H4=+30          |
+//| Absorption (P25b)      | [-10, +5]   | G      | Vol trend at tests |
+//| FVG Bonus (P34)        | [0, +15]    | P34    | Aligned FVG=+15    |
+//| Role Reversal          | [0, +15]    | —      | Flip confirmed     |
+//| Breaker Block (P37)    | [0, +10]    | P37    | OB broken+retested |
+//| TOTAL ADJUSTMENTS      | [-165, +185]| (extreme case)             |
+//|                                                                    |
+//| NOTE: GetSpreadTempScoreAdj() [-15, 0] exists but is NOT applied   |
+//| in CalcFinalScore. Spread filter affects alerts/entries via         |
+//| g_spread_blocked/g_spread_warning flags, not via score adjustment. |
+//|                                                                    |
+//| === FINAL SCORE ===                                                |
+//| final = clamp(base + adjustments, 0, SCORE_CAP=200)               |
+//|                                                                    |
+//| === LEVEL CLASSIFICATION ===                                       |
+//| Premium: ≥120 | L1: ≥85 | L2: ≥60 | L3: ≥40 | Hidden: <40       |
+//|                                                                    |
+//| === CONFLUENCE MULTIPLIER (applied AFTER CalcFinalScore) ===       |
+//| 2 entries: ×1.3 + 10pts | 3: ×1.5 + 25pts | 4+: ×1.8 + 40pts    |
+//|                                                                    |
+//| === BACKTEST VALIDATION WORKFLOW ===                                |
+//| 1. Enable Logger (Enable_Logger=true) for target pair+TF          |
+//| 2. Run on 6+ months historical data (Ctrl+F2 visual mode OFF)     |
+//| 3. Open {symbol}_{tf}_outcomes.csv in Excel/Python                 |
+//| 4. Pivot table: outcome vs score_at_test (10-point buckets)        |
+//|    Target: STRONG_REACT rate should increase monotonically         |
+//|    with score bucket. If not → weight imbalance detected.          |
+//| 5. Pivot: outcome vs pattern → verify pattern weights              |
+//|    Pinbar should have highest STRONG_REACT rate (weight=12)        |
+//|    If Engulfing outperforms → swap weights (engulf=12, pin=10)     |
+//| 6. Pivot: outcome vs session → verify session adjustments          |
+//|    Overlap should have best rate. Dead should have worst.          |
+//| 7. Check zone_width_pips vs outcome → verify precision scoring     |
+//|    Tighter zones should correlate with STRONG_REACT                |
+//| 8. Adjust weights in this file, re-run, compare pivot tables      |
+//|                                                                    |
+//| === KNOWN WEIGHT ASSUMPTIONS ===                                   |
+//| - Reaction Strength (35) is highest because ATR-normalized move   |
+//|   is the strongest predictor of institutional interest             |
+//| - Volume (15) > Pattern (12) because volume cannot be faked       |
+//|   but patterns can appear randomly in noise                        |
+//| - Fibonacci (13 max) is capped to prevent over-reliance on        |
+//|   self-fulfilling prophecy levels                                  |
+//| - Decay max (-35) matches Reaction max (+35) by design:           |
+//|   a strong zone should survive full decay cycle                    |
+//| - HTF Nesting (+30) is the highest single bonus because           |
+//|   multi-TF alignment is the strongest edge in S/R trading         |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
 //| CalcFibonacciScore — multi-leg swing-to-swing fibo scoring (P19) |
 //| Checks all valid fibo legs, awards confluence bonus for multi-leg|
 //+------------------------------------------------------------------+
@@ -481,6 +566,93 @@ void CalcFinalScore(int rp_index)
 
    // Write modified copy back to global array
    g_rp_array[rp_index] = rp;
+
+   //--- Auto-diagnose when zone first reaches Premium/100+ (Logger mode only)
+   //    Fires once per RP: only on fresh zones that just scored high
+   if(g_use_logger && rp.is_fresh &&
+      (rp.rp_level == RP_PREMIUM || rp.final_score >= 100.0))
+      DiagnoseScoreBreakdown(rp_index);
+}
+
+//+------------------------------------------------------------------+
+//| DiagnoseScoreBreakdown — print detailed score decomposition       |
+//| Call for any RP to see which weights are contributing most         |
+//| Useful for identifying overfit weights during backtest review      |
+//+------------------------------------------------------------------+
+void DiagnoseScoreBreakdown(int rp_index)
+{
+   if(!SafeRP(rp_index)) return;
+   SReactionPoint rp = g_rp_array[rp_index];
+
+   //--- Base components
+   double atr_pips = PriceToPips(g_cached_atr14_smooth);
+   if(atr_pips < 0.1) atr_pips = 10.0;
+   double reaction_score = MathMin((rp.initial_reaction_pips / atr_pips) * 35.0, 35.0);
+   double test_quality   = CalcTestQualityScore(rp_index);
+   double pattern_score  = CalcPatternDirectionScore(rp_index);
+   double fibo_score     = CalcFibonacciScore(rp.price);
+   int vol_shift = iBarShift(_Symbol, PERIOD_CURRENT, rp.time_formed);
+   double volume_score   = (vol_shift > 0) ? CalcVolumeScore(vol_shift, rp.session_formed) : 0.0;
+   double round_score    = RoundNumberScore(rp.price);
+   double vol_delta      = CalcVolumeDeltaBonus(rp_index);
+   double precision      = CalcZonePrecisionScore(rp_index);
+   double imbalance      = rp.has_imbalance ? 8.0 : 0.0;
+
+   //--- Adjustments
+   double regime    = GetRegimeScoreAdj(rp.rp_type);
+   double decay     = -CalcDecayPenalty(rp_index);
+   double recent    = CalcRecentBonus(rp_index);
+   double session   = GetSessionScoreAdj(rp.session_formed);
+   double dow       = GetDayOfWeekAdj();
+   double structure = GetStructureScoreAdj(rp_index);
+   double sweep     = GetLiquiditySweepBonus(rp_index);
+   double trend     = GetTrendAlignmentScore(rp.rp_type);
+   double nesting   = CalcHTFNestingBonus(rp_index);
+   double absorb    = CalcAbsorptionAdj(rp_index);
+   double fvg       = CalcFVGBonus(rp_index);
+   double spread    = GetSpreadTempScoreAdj();
+   double reversal  = rp.is_role_reversed ? 15.0 : 0.0;
+   double breaker   = (rp.is_breaker_block && rp.is_role_reversed) ? 10.0 : 0.0;
+
+   Print("=== SCORE BREAKDOWN rp_id=", rp.id,
+         " price=", DoubleToString(rp.price, (int)_Digits),
+         " final=", DoubleToString(rp.final_score, 1), " ===");
+   Print("  BASE: reaction=", DoubleToString(reaction_score, 1),
+         " test=", DoubleToString(test_quality, 1),
+         " pattern=", DoubleToString(pattern_score, 1),
+         " fibo=", DoubleToString(fibo_score, 1),
+         " volume=", DoubleToString(volume_score, 1));
+   Print("  BASE: round=", DoubleToString(round_score, 1),
+         " volDelta=", DoubleToString(vol_delta, 1),
+         " precision=", DoubleToString(precision, 1),
+         " imbalance=", DoubleToString(imbalance, 1));
+   Print("  ADJ:  regime=", DoubleToString(regime, 1),
+         " decay=", DoubleToString(decay, 1),
+         " recent=", DoubleToString(recent, 1),
+         " session=", DoubleToString(session, 1),
+         " dow=", DoubleToString(dow, 1));
+   Print("  ADJ:  structure=", DoubleToString(structure, 1),
+         " sweep=", DoubleToString(sweep, 1),
+         " trend=", DoubleToString(trend, 1),
+         " nesting=", DoubleToString(nesting, 1));
+   Print("  ADJ:  absorb=", DoubleToString(absorb, 1),
+         " fvg=", DoubleToString(fvg, 1),
+         " reversal=", DoubleToString(reversal, 1),
+         " breaker=", DoubleToString(breaker, 1));
+   Print("  INFO: spread=", DoubleToString(spread, 1),
+         " (not in CalcFinalScore — affects alerts/entries only)");
+
+   //--- Flag dominant component (>40% of final score)
+   double base = rp.base_score;
+   if(base > 0.0)
+   {
+      if(reaction_score / base > 0.40)
+         Print("  WARNING: Reaction strength dominates base (", DoubleToString(reaction_score/base*100, 0), "%)");
+      if(volume_score / base > 0.40)
+         Print("  WARNING: Volume dominates base (", DoubleToString(volume_score/base*100, 0), "%)");
+   }
+   if(rp.final_score > 0.0 && nesting / rp.final_score > 0.25)
+      Print("  WARNING: HTF Nesting contributes >25% of final score");
 }
 
 #endif // RP_SCORING_MQH

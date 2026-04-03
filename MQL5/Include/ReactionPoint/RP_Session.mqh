@@ -11,6 +11,111 @@
 // NO extern/input here — reads g_utc_offset, g_show_session_background from globals
 
 //+------------------------------------------------------------------+
+//| DST-Aware UTC Offset Detection                                     |
+//|                                                                    |
+//| Problem: Static UTC_Offset input becomes wrong after DST switch.   |
+//|   Broker servers shift by ±1 hour during DST transitions.          |
+//|   E.g., UTC+3 (winter) → UTC+2 (summer) for some brokers, or      |
+//|   UTC+2 → UTC+3 for EET-based brokers.                            |
+//|                                                                    |
+//| Solution: Compare broker server time with TimeGMT() every new bar.|
+//|   TimeGMT() returns UTC from OS clock (DST-aware).                 |
+//|   TimeCurrent() returns broker server time.                        |
+//|   Difference = actual broker UTC offset, auto-adjusting for DST.   |
+//|                                                                    |
+//| Fallback: If TimeGMT() unavailable or delta unstable, keep using   |
+//|   the manual UTC_Offset input (no regression).                     |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| GetEffectiveUTCOffset — returns best available UTC offset          |
+//+------------------------------------------------------------------+
+int GetEffectiveUTCOffset()
+{
+   if(g_utc_offset_auto_valid)
+      return g_utc_offset_auto;
+   return g_utc_offset;
+}
+
+//+------------------------------------------------------------------+
+//| DetectUTCOffset — auto-detect broker UTC offset from TimeGMT()    |
+//| Call once per new bar (lightweight — 2 datetime comparisons)       |
+//| Uses median of last 5 samples to filter transient spikes           |
+//+------------------------------------------------------------------+
+void DetectUTCOffset()
+{
+   datetime server_time = TimeCurrent();
+   datetime gmt_time    = TimeGMT();
+
+   //--- Guard: TimeGMT() returns 0 on some terminals or in tester
+   if(gmt_time <= 0 || server_time <= 0)
+   {
+      g_utc_offset_auto_valid = false;
+      return;
+   }
+
+   //--- Calculate raw offset (round to nearest hour)
+   int diff_seconds = (int)(server_time - gmt_time);
+   int offset_hours = (int)MathRound((double)diff_seconds / 3600.0);
+
+   //--- Sanity check: valid broker offsets are typically [-12, +14]
+   if(offset_hours < -12 || offset_hours > 14)
+   {
+      g_utc_offset_auto_valid = false;
+      return;
+   }
+
+   //--- Median filter: collect 5 samples, use median to reject outliers
+   //    (e.g., during the exact second of DST switch, values may be unstable)
+   static int  offset_samples[5];
+   static int  sample_count = 0;
+   static int  sample_idx   = 0;
+
+   offset_samples[sample_idx] = offset_hours;
+   sample_idx = (sample_idx + 1) % 5;
+   if(sample_count < 5) sample_count++;
+
+   //--- Need at least 3 samples for reliable median
+   if(sample_count < 3)
+   {
+      g_utc_offset_auto_valid = false;
+      return;
+   }
+
+   //--- Sort copy to find median
+   int sorted[5];
+   int n = MathMin(sample_count, 5);
+   for(int i = 0; i < n; i++)
+      sorted[i] = offset_samples[i];
+
+   // Simple insertion sort (n <= 5)
+   for(int i = 1; i < n; i++)
+   {
+      int key = sorted[i];
+      int j = i - 1;
+      while(j >= 0 && sorted[j] > key)
+      {
+         sorted[j + 1] = sorted[j];
+         j--;
+      }
+      sorted[j + 1] = key;
+   }
+
+   int median_offset = sorted[n / 2];
+
+   //--- Detect change from previous auto offset
+   if(g_utc_offset_auto_valid && median_offset != g_utc_offset_auto)
+   {
+      Print("RP: DST offset change detected: UTC+", g_utc_offset_auto,
+            " → UTC+", median_offset,
+            " (manual input was UTC+", g_utc_offset, ")");
+   }
+
+   g_utc_offset_auto = median_offset;
+   g_utc_offset_auto_valid = true;
+}
+
+//+------------------------------------------------------------------+
 //| Session definitions (UTC)                                         |
 //|   Asian         00:00 - 07:00                                     |
 //|   London Open   07:00 - 08:30                                     |
@@ -30,8 +135,9 @@ ENUM_SESSION GetSessionForTime(datetime time)
    MqlDateTime dt;
    TimeToStruct(time, dt);
 
-   // Convert server time to UTC
-   int utc_hour = (dt.hour - g_utc_offset + 24) % 24;
+   // Convert server time to UTC using DST-aware offset
+   int effective_offset = GetEffectiveUTCOffset();
+   int utc_hour = (dt.hour - effective_offset + 24) % 24;
    int utc_min  = dt.min;
    double hour_min = utc_hour + utc_min / 60.0;
 
@@ -109,8 +215,8 @@ double GetDayOfWeekAdj()
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
 
-   // Convert to UTC hour for Friday check
-   int utc_hour = (dt.hour - g_utc_offset + 24) % 24;
+   // Convert to UTC hour for Friday check (DST-aware)
+   int utc_hour = (dt.hour - GetEffectiveUTCOffset() + 24) % 24;
 
    switch(dt.day_of_week)
    {
