@@ -154,6 +154,11 @@ void UpdateMarketStructure()
 //| CheckLiquiditySweep                                               |
 //| Detects when price sweeps past swing H/L then closes back inside |
 //| = Institutional trap signal, high probability reversal            |
+//|                                                                    |
+//| Volume qualification (P22c):                                       |
+//|   High-vol sweep (>1.5x MA20) = stronger signal → tiered bonus    |
+//|   Low-vol sweep (<1.0x MA20) = likely noise → rejected             |
+//|   Stored in rp.sweep_vol_ratio for GetLiquiditySweepBonus()        |
 //+------------------------------------------------------------------+
 bool CheckLiquiditySweep(int bar_index)
 {
@@ -170,6 +175,16 @@ bool CheckLiquiditySweep(int bar_index)
 
    double upper_wick = high_i - MathMax(iOpen(_Symbol, PERIOD_CURRENT, bar_index), close_i);
    double lower_wick = MathMin(iOpen(_Symbol, PERIOD_CURRENT, bar_index), close_i) - low_i;
+
+   //--- Volume qualification: reject low-volume sweeps (likely noise)
+   double vol_ratio = 0.0;
+   long tick_vol = iVolume(_Symbol, PERIOD_CURRENT, bar_index);
+   if(g_cached_volume_ma20 > 0.0 && tick_vol > 0)
+      vol_ratio = (double)tick_vol / g_cached_volume_ma20;
+
+   // Minimum volume threshold: sweep must have at least average volume
+   // to indicate institutional participation (not just thin-market spike)
+   if(vol_ratio < 1.0 && vol_ratio > 0.0) return false;
 
    // Check against nearby swing points
    int N = g_swing_lookback;
@@ -194,11 +209,9 @@ bool CheckLiquiditySweep(int bar_index)
       // Sweep above swing high: bar high > swing high, close back below
       if(is_sh && high_i > prev_high && close_i < prev_high)
       {
-         // Wick on sweep side >= 40% range
          if(upper_wick >= range * 0.40)
          {
-            // Mark nearest RP
-            MarkNearestRPSweep(prev_high);
+            MarkNearestRPSweep(prev_high, vol_ratio);
             return true;
          }
       }
@@ -218,7 +231,7 @@ bool CheckLiquiditySweep(int bar_index)
       {
          if(lower_wick >= range * 0.40)
          {
-            MarkNearestRPSweep(prev_low);
+            MarkNearestRPSweep(prev_low, vol_ratio);
             return true;
          }
       }
@@ -228,9 +241,9 @@ bool CheckLiquiditySweep(int bar_index)
 }
 
 //+------------------------------------------------------------------+
-//| Mark nearest RP as having liquidity sweep                         |
+//| Mark nearest RP as having liquidity sweep + store vol ratio       |
 //+------------------------------------------------------------------+
-void MarkNearestRPSweep(double sweep_price)
+void MarkNearestRPSweep(double sweep_price, double vol_ratio = 0.0)
 {
    double min_dist = DBL_MAX;
    int    best_idx = -1;
@@ -250,6 +263,7 @@ void MarkNearestRPSweep(double sweep_price)
    if(best_idx >= 0 && SafeRP(best_idx) && PriceToPips(min_dist) <= g_zone_width_pips * 2.0)
    {
       g_rp_array[best_idx].has_liquidity_sweep = true;
+      g_rp_array[best_idx].sweep_vol_ratio     = vol_ratio;
       if(SafeDirty(best_idx))
          g_rp_dirty[best_idx] = true;
    }
@@ -306,16 +320,27 @@ double GetStructureScoreAdj(int rp_index)
 }
 
 //+------------------------------------------------------------------+
-//| GetLiquiditySweepBonus — strongest bonus for sweep + RP           |
+//| GetLiquiditySweepBonus — volume-tiered bonus for sweep + RP       |
+//|                                                                    |
+//| Tiered by volume at sweep candle (P22c):                           |
+//|   vol > 2.0× MA20:  +25 (institutional sweep, very strong)        |
+//|   vol > 1.5× MA20:  +20 (confirmed sweep, strong)                 |
+//|   vol > 1.0× MA20:  +12 (average volume sweep, moderate)          |
+//|   vol unknown (0):   +15 (legacy fallback, no volume data)         |
+//|                                                                    |
+//| Low-volume sweeps are already rejected in CheckLiquiditySweep().   |
 //+------------------------------------------------------------------+
 double GetLiquiditySweepBonus(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
+   if(!g_rp_array[rp_index].has_liquidity_sweep) return 0.0;
 
-   if(g_rp_array[rp_index].has_liquidity_sweep)
-      return 20.0;
+   double vr = g_rp_array[rp_index].sweep_vol_ratio;
 
-   return 0.0;
+   if(vr <= 0.0)  return 15.0;    // Legacy: no volume data available
+   if(vr > 2.0)   return 25.0;    // Institutional sweep (very high volume)
+   if(vr > 1.5)   return 20.0;    // Confirmed sweep (high volume)
+   return 12.0;                    // Average volume sweep (passed min threshold)
 }
 
 #endif // RP_MARKETSTRUCTURE_MQH

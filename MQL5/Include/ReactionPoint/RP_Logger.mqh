@@ -38,6 +38,8 @@ struct SPendingOutcome
    ENUM_SESSION     session_formed;
    ENUM_CANDLE_PATTERN candle_pattern;
    bool             has_wick_filter;
+   bool             has_liquidity_sweep;
+   double           sweep_vol_ratio;
    int              strong_test_count;
    int              weak_test_count;
 };
@@ -131,6 +133,7 @@ bool InitLogger()
          "zone_width_pips", "atr14_pips", "width_atr_ratio",
          "pattern", "reaction_pips", "volume_ratio",
          "session", "regime", "has_wick_filter", "is_order_block",
+         "has_sweep", "sweep_vol_ratio",
          "base_score", "final_score", "level");
    }
 
@@ -171,7 +174,8 @@ bool InitLogger()
          "test_count", "max_favorable_pips", "max_adverse_pips",
          "bars_to_max_favorable", "outcome",
          "session", "regime", "pattern",
-         "has_wick_filter", "strong_tests", "weak_tests",
+         "has_wick_filter", "has_sweep", "sweep_vol_ratio",
+         "strong_tests", "weak_tests",
          "zone_width_pips", "width_atr_ratio");
    }
 
@@ -224,6 +228,8 @@ bool LogZoneCreated(const SReactionPoint &rp)
       EnumToString(g_current_regime),
       rp.has_wick_filter ? "Y" : "N",
       rp.is_order_block ? "Y" : "N",
+      rp.has_liquidity_sweep ? "Y" : "N",
+      DoubleToString(rp.sweep_vol_ratio, 2),
       DoubleToString(rp.base_score, 1),
       DoubleToString(rp.final_score, 1),
       EnumToString(rp.rp_level));
@@ -301,6 +307,8 @@ bool LogZoneBroken(const SReactionPoint &rp)
       EnumToString(g_current_regime),
       EnumToString(rp.candle_pattern),
       rp.has_wick_filter ? "Y" : "N",
+      rp.has_liquidity_sweep ? "Y" : "N",
+      DoubleToString(rp.sweep_vol_ratio, 2),
       rp.strong_test_count,
       rp.weak_test_count,
       DoubleToString(zone_width, 1),
@@ -354,6 +362,8 @@ void RegisterPendingOutcome(const SReactionPoint &rp)
    g_pending_outcomes[slot].session_formed     = rp.session_formed;
    g_pending_outcomes[slot].candle_pattern     = rp.candle_pattern;
    g_pending_outcomes[slot].has_wick_filter    = rp.has_wick_filter;
+   g_pending_outcomes[slot].has_liquidity_sweep= rp.has_liquidity_sweep;
+   g_pending_outcomes[slot].sweep_vol_ratio    = rp.sweep_vol_ratio;
    g_pending_outcomes[slot].strong_test_count  = rp.strong_test_count;
    g_pending_outcomes[slot].weak_test_count    = rp.weak_test_count;
    g_pending_outcomes[slot].is_active          = true;
@@ -445,6 +455,8 @@ void CheckPendingOutcomes(int measure_bars)
          EnumToString(g_current_regime),
          EnumToString(g_pending_outcomes[i].candle_pattern),
          g_pending_outcomes[i].has_wick_filter ? "Y" : "N",
+         g_pending_outcomes[i].has_liquidity_sweep ? "Y" : "N",
+         DoubleToString(g_pending_outcomes[i].sweep_vol_ratio, 2),
          g_pending_outcomes[i].strong_test_count,
          g_pending_outcomes[i].weak_test_count,
          DoubleToString(zone_width, 1),

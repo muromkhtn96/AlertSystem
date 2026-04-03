@@ -1,5 +1,5 @@
 # HƯỚNG DẪN PHÂN TÍCH LOG & TINH CHỈNH SCORING
-## Reaction Point Indicator v3.0 — Data-Driven Optimization
+## Reaction Point Indicator v3.4 — Data-Driven Optimization
 
 ---
 
@@ -125,8 +125,11 @@ Hoặc trong MT5: File → Open Data Folder → MQL5 → Files → RP_Logs
 | session | SESSION_LONDON / ... | **KEY:** session nào tạo zone tốt? |
 | regime | REGIME_STRONG_TREND / ... | **KEY:** regime nào tạo zone tốt? |
 | has_wick_filter | Y/N | Wick filter có cải thiện? |
+| is_order_block | Y/N | Zone có phải Order Block? |
+| has_sweep | Y/N | Zone có liquidity sweep? |
+| sweep_vol_ratio | 0.0-5.0+ | **KEY:** volume tại sweep (>1.5 = strong) |
 | base_score | 0-100 | Kiểm tra scoring distribution |
-| final_score | 0-150 | **KEY:** score cao = win rate cao? |
+| final_score | 0-200 | **KEY:** score cao = win rate cao? |
 | level | RP_PREMIUM / RP_LEVEL1 / ... | Kiểm tra level distribution |
 
 ### 3.2. tests.csv — Mỗi lần zone bị test
@@ -152,6 +155,8 @@ Hoặc trong MT5: File → Open Data Folder → MQL5 → Files → RP_Logs
 | max_adverse_pips | Di chuyển xấu nhất (pips) | Đo lường rủi ro |
 | bars_to_max_favorable | Bao nhiêu bars đạt peak | Timing |
 | outcome | STRONG_REACT / WEAK_REACT / FAILED / NEUTRAL / BROKEN | **KPI CHÍNH** |
+| has_sweep | Y/N | **KEY:** sweep zones win rate cao hơn? |
+| sweep_vol_ratio | 0.0+ | **KEY:** high-vol sweep (>1.5) vs low-vol |
 | strong_tests | Số body tests | Test quality ảnh hưởng? |
 | weak_tests | Số wick tests | Test quality ảnh hưởng? |
 | zone_width_pips | Width tại thời điểm test | Zone hẹp/rộng vs outcome |
@@ -372,9 +377,12 @@ Round Number > 20 pips:  43% win rate
 | Yếu tố X win rate cao hơn weight hiện tại | Tăng weight X | RP_Scoring.mqh | Thấp |
 | Yếu tố X win rate thấp hơn weight hiện tại | Giảm weight X | RP_Scoring.mqh | Thấp |
 | Yếu tố X không ảnh hưởng (win rate ~= overall) | Giảm về 0 hoặc bỏ | RP_Scoring.mqh | Trung bình |
-| Session A win rate khác biệt cho pair B | Thêm pair-specific adj | RP_Session.mqh | Thấp |
+| Session A win rate khác biệt cho pair B | Sửa pair profile session_adj[] | RP_Utils.mqh (BuildPairProfile) | Thấp |
 | Score threshold không phân tách tốt | Điều chỉnh ngưỡng level | RP_Utils.mqh (ClassifyRPLevel) | Trung bình |
 | Zone width X hiệu quả nhất | Điều chỉnh ATR multiplier | RP_Detection.mqh | Trung bình |
+| Volume spike threshold quá cao/thấp cho pair X | Sửa pair profile vol_extreme/strong/above | RP_Utils.mqh (BuildPairProfile) | Thấp |
+| Test count penalty quá nhẹ/nặng cho pair X | Sửa pair profile test_penalty_per/test_2nd_score | RP_Utils.mqh (BuildPairProfile) | Thấp |
+| Sweep false positives cao trên pair X | Tăng volume threshold hoặc wick % | RP_MarketStructure.mqh | Trung bình |
 
 ---
 
@@ -389,21 +397,23 @@ Round Number > 20 pips:  43% win rate
 
 ### 7.2. Bảng weights hiện tại và cách sửa
 
-| Yếu tố | File | Dòng code | Weight hiện tại | Cách sửa |
+| Yếu tố | File | Function | Weight hiện tại | Cách sửa |
 |---|---|---|---|---|
-| Reaction Strength | RP_Scoring.mqh | `* 35.0, 35.0` | max 35 | Đổi 35.0 → X |
-| Test Quality | RP_Scoring.mqh | CalcTestQualityScore() | max 25 | Sửa return values |
-| Candle Pattern | RP_Scoring.mqh | switch(rp.candle_pattern) | 12/10/8/6 | Sửa từng giá trị |
-| Fibonacci | RP_Scoring.mqh | CalcFibonacciScore() | 10/8/7/4 | Sửa từng giá trị |
-| Volume | RP_Scoring.mqh | CalcVolumeScore() | 15/8 | Sửa threshold & score |
-| Round Number | RP_Scoring.mqh | RoundNumberScore() | 8/4 | Sửa giá trị |
+| Reaction Strength | RP_Scoring.mqh | CalcBaseScore() | max 35 | Đổi 35.0 → X |
+| Test Quality | RP_Scoring.mqh | CalcTestQualityScore() | max 12, pair-dependent | Sửa g_pair_profile.test_2nd_score/test_penalty_per |
+| Candle Pattern | RP_Scoring.mqh | CalcPatternDirectionScore() | 12/10/8/6 | Sửa từng giá trị |
+| Fibonacci | RP_Scoring.mqh | CalcFibonacciScore() | max 18 (10+5/leg) | Sửa base scores + per-leg bonus |
+| Volume | RP_Scoring.mqh | CalcVolumeScore() | 15/12/8/3 pair-dependent | Sửa g_pair_profile.vol_extreme/strong/above |
+| Round Number | RP_Scoring.mqh | RoundNumberScore() | 8/5/3 | Sửa giá trị |
 | Volume Delta | RP_Scoring.mqh | CalcVolumeDeltaBonus() | ±5 | Sửa 5.0 → X |
-| Zone Precision | RP_Scoring.mqh | CalcZonePrecisionScore() | +5/+5/+3/-5 | Sửa từng giá trị |
+| Zone Precision | RP_Scoring.mqh | CalcZonePrecisionScore() | [-5,+13] gradient | Sửa width/ATR thresholds |
 | Regime adj | RP_RegimeFilter.mqh | GetRegimeScoreAdj() | [-30,+20] | Sửa return values |
-| Session adj | RP_Session.mqh | GetSessionScoreAdj() | [-20,+15] | Sửa adj values |
+| Session adj | RP_Session.mqh | GetSessionScoreAdj() | base + g_pair_profile.session_adj[] | Sửa BuildPairProfile() trong RP_Utils.mqh |
 | Structure adj | RP_MarketStructure.mqh | GetStructureScoreAdj() | [-20,+15] | Sửa return values |
+| Liquidity Sweep | RP_MarketStructure.mqh | GetLiquiditySweepBonus() | [0,+25] vol-tiered | Sửa volume tiers |
 | Absorption | RP_Scoring.mqh | CalcAbsorptionAdj() | [-10,+5] | Sửa thresholds & returns |
-| Level thresholds | RP_Utils.mqh | ClassifyRPLevel() | 110/80/60/40 | Sửa ngưỡng |
+| Level thresholds | RP_Utils.mqh | ClassifyRPLevel() | 120/85/60/40 | Sửa ngưỡng |
+| **Pair Profile** | **RP_Utils.mqh** | **BuildPairProfile()** | **16 params/pair** | **Thêm/sửa pair block** |
 
 ### 7.3. Ví dụ tinh chỉnh thực tế
 
@@ -421,6 +431,34 @@ Lý do: Pinbar thực sự hiệu quả → tăng weight
        Round Number không ảnh hưởng → giảm một nửa
        Tổng thay đổi: +3 -3 -4 = -4 → có thể phân bổ cho yếu tố khác
 ```
+
+### 7.4. Tinh chỉnh Pair Profile (v3.4 mới)
+
+Từ v3.4, mỗi cặp tiền có **SPairProfile** riêng. Cách tinh chỉnh:
+
+```
+1. Chạy Logger cho pair cần tối ưu (VD: CADJPY H1, 6 tháng)
+2. Mở outcomes.csv → PivotTable theo session
+3. So sánh win rate per session vs session_adj[] hiện tại
+4. Nếu NY Open win rate = 72% nhưng adj chỉ +10 → tăng lên +12
+5. Sửa trong BuildPairProfile() → block CADJPY → session_adj[3]
+```
+
+**Thông số pair profile có thể tinh chỉnh:**
+
+| Param | Ý nghĩa | Cách xác định từ data |
+|---|---|---|
+| session_adj[0-6] | Bonus/penalty per session | PivotTable: outcome vs session |
+| adx_strong/weak | Ngưỡng ADX | Plot ADX vs win rate, tìm cutoff |
+| decay_points | Tốc độ zone mất điểm | Scatter: zone_age vs outcome |
+| vol_extreme/strong/above | Ngưỡng volume spike | PivotTable: volume_ratio buckets vs outcome |
+| test_penalty_per | Penalty mỗi test thêm | PivotTable: test_count vs outcome |
+| test_2nd_score | Điểm ở test thứ 2 | Filter test_number=2, tính win rate |
+| breakout_confirm_pips | Khoảng cách xác nhận breakout | False breakout rate analysis |
+| reaction_atr_mult | Ngưỡng min reaction | Scatter: reaction_pips/ATR vs outcome |
+
+**Lưu ý:** Profile tự scale theo TF (M15/M30/H1/H4).
+Chỉ cần tối ưu trên H1 — các TF khác tự adapt.
 
 ---
 

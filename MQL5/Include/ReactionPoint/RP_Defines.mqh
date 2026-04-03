@@ -77,6 +77,7 @@ struct SReactionPoint
    double           display_opacity;
    int              day_of_week_formed;
    bool             has_liquidity_sweep;
+   double           sweep_vol_ratio;      // P22c: volume ratio at sweep (0=unknown, >1.5=strong)
    bool             has_wick_filter;       // P24d: true if wick ratio filter trimmed zone
    bool             is_order_block;        // P29: true if zone derived from Order Block detection
    int              ob_bar_index;          // P29: bar index of OB candle (-1 if not found)
@@ -122,6 +123,7 @@ struct SReactionPoint
       display_opacity      = 100.0;
       day_of_week_formed   = 0;
       has_liquidity_sweep  = false;
+      sweep_vol_ratio      = 0.0;
       has_wick_filter      = false;
       is_order_block       = false;
       ob_bar_index         = -1;
@@ -293,13 +295,13 @@ struct SPairProfile
    //--- Session score adjustments (indexed by ENUM_SESSION ordinal)
    double session_adj[7];
 
-   //--- ADX thresholds
+   //--- ADX thresholds (already TF-adjusted in BuildPairProfile)
    double adx_strong;           // ADX strong trend threshold override
    double adx_weak;             // ADX weak trend threshold override
 
    //--- Decay tuning
-   int    decay_points;         // Points lost per decay interval
-   int    max_age_bars;         // Max zone age in bars (0 = use preset default)
+   int    decay_points;         // Points lost per decay interval (already TF-scaled)
+   int    max_age_bars;         // Max zone age in bars (already TF-scaled, 0 = use preset default)
 
    //--- Volume scoring thresholds (tick volume / MA20 ratios)
    double vol_extreme;          // Extreme volume spike threshold
@@ -309,6 +311,11 @@ struct SPairProfile
    //--- Test quality tuning
    double test_penalty_per;     // Penalty per excess test beyond 2
    double test_2nd_score;       // Score for 2nd test
+
+   //--- Zone detection tuning (0 = use preset default)
+   int    breakout_confirm_pips;// Pips beyond zone for breakout confirmation
+   int    initial_bars_to_scan; // Historical bars to scan
+   double reaction_atr_mult;    // ATR multiplier for min reaction move
 
    //--- Zone precision
    int    min_score_override;   // Override min_score_to_show (0 = use preset default)
@@ -328,6 +335,9 @@ struct SPairProfile
       vol_above          = 1.2;
       test_penalty_per   = 5.0;
       test_2nd_score     = 5.0;
+      breakout_confirm_pips = 0;
+      initial_bars_to_scan  = 0;
+      reaction_atr_mult     = 0.0;   // 0 = use input default
       min_score_override = 0;
       name               = "DEFAULT";
    }

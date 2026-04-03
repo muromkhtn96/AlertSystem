@@ -28,8 +28,8 @@
 //|   fresh=+10, 1st test=+12, 3+=penalty            liquidity drain   |
 //| Pattern Direction(P27a)| [0, +12]    | 12%    | Aligned=full       |
 //|   pinbar=12,engulf=10,OB=8,wick=6                misaligned=30%    |
-//| Fibonacci (P19)        | [0, +13]    | 13%    | 618=10,786=8       |
-//|   multi-leg bonus=+3                              500=7,382=4      |
+//| Fibonacci (P19)        | [0, +18]    | 18%    | 618=10,786=8       |
+//|   multi-leg +5/extra leg, cap 18                   500=7,382=4     |
 //| Volume (P27c)          | [0, +15]    | 15%    | Session-normalized |
 //|   >2x=15, >1.5x=12, >1.2x=8, >1x=3             vs MA20           |
 //| Round Number           | [0, +8]     |  8%    | x.x000=8, x500=5  |
@@ -49,7 +49,7 @@
 //| Session                | [-20, +15]  | E      | Overlap=+15        |
 //| Day of Week            | [-10, +5]   | E      | Mon=-5,Fri PM=-10  |
 //| Structure (BOS/CHoCH)  | [-20, +15]  | H      | Aligned=+15        |
-//| Liquidity Sweep        | [0, +20]    | H      | Sweep+RP=+20       |
+//| Liquidity Sweep        | [0, +25]    | H      | Vol-tiered P22c    |
 //| Trend Alignment (P20)  | [-25, +20]  | D      | All TF agree=+20   |
 //| HTF Nesting            | [0, +30]    | D      | H1+H4=+30          |
 //| Absorption (P25b)      | [-10, +5]   | G      | Vol trend at tests |
@@ -102,14 +102,22 @@
 
 //+------------------------------------------------------------------+
 //| CalcFibonacciScore — multi-leg swing-to-swing fibo scoring (P19) |
-//| Checks all valid fibo legs, awards confluence bonus for multi-leg|
+//| Checks all valid fibo legs, awards scaled bonus for multi-leg    |
+//|                                                                    |
+//| Multi-leg confluence bonus: +5 per additional leg (was +3 flat)   |
+//|   1 leg hit:  base score only (4-10)                               |
+//|   2 legs hit: base + 5 = max 15                                   |
+//|   3 legs hit: base + 10 = max 20 (capped at 18)                  |
+//|                                                                    |
+//| Rationale: multi-leg fibo confluence is a strong institutional     |
+//| signal — same price level appearing in 2+ distinct swing legs      |
+//| indicates deliberate positioning, not random noise.                |
 //+------------------------------------------------------------------+
 double CalcFibonacciScore(double price)
 {
    double tolerance = PipsToPrice(g_fibo_tolerance_pips);
    double best_score = 0.0;
-   bool   found_in_another_leg = false;
-   bool   confluence_bonus_paid = false;
+   int    legs_hit   = 0;     // Count of distinct legs where price matches a fibo level
 
    //--- Scan all valid fibo legs
    for(int i = 0; i < g_fibo_leg_count; i++)
@@ -128,12 +136,7 @@ double CalcFibonacciScore(double price)
          score = 4.0;
 
       if(score > 0.0)
-      {
-         //--- Track multi-leg confluence (bonus applied AFTER loop)
-         if(found_in_another_leg)
-            confluence_bonus_paid = true;
-         found_in_another_leg = true;
-      }
+         legs_hit++;
 
       if(score > best_score)
          best_score = score;
@@ -151,11 +154,12 @@ double CalcFibonacciScore(double price)
       }
    }
 
-   //--- Apply multi-leg bonus to best_score (not to individual leg score)
-   if(confluence_bonus_paid && best_score > 0.0)
-      best_score += 3.0;
+   //--- Multi-leg confluence bonus: +5 per additional leg beyond the first
+   //    2 legs = +5 | 3 legs = +10 | capped at 18 total
+   if(legs_hit >= 2 && best_score > 0.0)
+      best_score += (double)(legs_hit - 1) * 5.0;
 
-   return MathMin(best_score, 13.0); // Cap: 10 base + 3 one-time confluence bonus
+   return MathMin(best_score, 18.0); // Cap: 10 base + 5×(legs-1), max 18
 }
 
 //+------------------------------------------------------------------+

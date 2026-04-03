@@ -1,4 +1,4 @@
-# REACTION POINT INDICATOR v3.3
+# REACTION POINT INDICATOR v3.4
 ## Logic, Thong so UI & Huong dan Trade
 
 ---
@@ -50,7 +50,7 @@ Zone = vung gia co xac suat cao gia se phan ung (bật lên hoặc bật xuống
 | 1 | Reaction Strength | max 35 | reaction_pips / ATR_smooth x 35 |
 | 2 | Test Quality (Mitigation) | -15 to +12 | Fresh +10, test 1 +12, test 2 +5, test 3+ penalty |
 | 3 | Candle Pattern | max 12 | Pinbar 12, Engulfing 10, Outside 8, Wick 6 |
-| 4 | Fibonacci | max 13 | 61.8% +10, 78.6% +8, 50% +7, 38.2% +4, multi-leg +3 |
+| 4 | Fibonacci | max 18 | 61.8% +10, 78.6% +8, 50% +7, 38.2% +4, multi-leg +5/leg |
 | 5 | Volume | max 15 | vol/MA20: >2x +15, >1.5x +12, >1.2x +8 |
 | 6 | Round Number | max 8 | gan .000 +8, gan .500 +5 |
 | 7 | Volume Delta | +/-5 | nen bullish tai support +5, bearish -5 |
@@ -66,7 +66,7 @@ Zone = vung gia co xac suat cao gia se phan ung (bật lên hoặc bật xuống
 | Recent Bonus | 0 to +15 | phan ung trong 5 bar gan nhat +15 |
 | Session + DoW | -30 to +20 | Overlap +15, Dead -20, Friday chieu -10 |
 | Structure (BOS/CHoCH) | -20 to +15 | cung BOS +15, nguoc -20, CHoCH fade |
-| Liquidity Sweep | 0 to +20 | quet qua swing roi quay lai +20 |
+| Liquidity Sweep | 0 to +25 | quet qua swing + volume tiered: >2x=+25, >1.5x=+20, >1x=+12 |
 | Trend Alignment (3 TF) | -25 to +20 | 3 TF cung huong +20, nguoc -25 |
 | HTF Nesting | 0 to +30 | zone xac nhan boi H4+D1 +30 |
 | Absorption | -10 to +5 | volume tang qua test → zone yeu -10 |
@@ -89,12 +89,15 @@ Zone = vung gia co xac suat cao gia se phan ung (bật lên hoặc bật xuống
 
 Moi lan gia test zone, liquidity tai zone giam dan:
 
-| Lan test | Diem | Y nghia |
-|----------|------|---------|
-| Chua test (Fresh) | **+10** | Zone manh nhat — chua ai "an" liquidity |
-| Test 1 | **+12** | Zone duoc xac nhan — tin hieu tot nhat |
-| Test 2 | **+5** | Zone con hieu luc nhung dang yeu |
-| Test 3+ | **-5 moi lan** (floor -15) | Zone da bi "an het" — nen tranh |
+| Lan test | Diem (default) | Diem (CADJPY) | Y nghia |
+|----------|----------------|---------------|---------|
+| Chua test (Fresh) | **+10** | **+10** | Zone manh nhat — chua ai "an" liquidity |
+| Test 1 | **+12** | **+12** | Zone duoc xac nhan — tin hieu tot nhat |
+| Test 2 | **+5** | **+2** | Zone con hieu luc nhung dang yeu |
+| Test 3+ | **-5/lan** (floor -15) | **-7/lan** | Zone da bi "an het" — nen tranh |
+
+> **Luu y:** Test quality penalty tuy thuoc vao cap tien. Pair trending manh (CADJPY, GBPJPY)
+> co penalty nang hon vi zone break nhanh hon. Thong so duoc set trong `SPairProfile`.
 
 ### 1.5 FVG (Fair Value Gap)
 
@@ -115,6 +118,44 @@ Breaker = Order Block bi pha boi impulse manh (body >= 0.8 x ATR), sau do duoc r
 Scoring dung **ATR smoothed (EMA period 10)** thay vi ATR raw:
 - Tranh score nhay khi news spike
 - Detection (tao zone, FVG, proximity) van dung ATR raw → phan ung nhanh
+
+### 1.8 Pair Profile (P22b) — Tu dong tinh chinh theo cap tien
+
+Indicator tu dong nhan dien cap tien va ap dung profile rieng. **Khong can chinh tay.**
+
+| Cap tien | Session chinh | ADX (H1) | Zone life | Decay | Vol threshold |
+|----------|--------------|----------|-----------|-------|---------------|
+| **GBPUSD** | London Open +18 | 25/20 | 8 ngay | default | 2.0/1.5/1.2 |
+| **CADJPY** | NY Open +20 | 30/23 | 5 ngay | 4 pts | 2.5/1.8/1.4 |
+| **GBPJPY** | London Open +18 | 28/22 | 4 ngay | 4 pts | 2.2/1.6/1.3 |
+| **USDJPY** | Asian -3 | 27/22 | 7 ngay | default | 2.0/1.5/1.2 |
+| **USDCAD** | NY Open +18 | default | 7 ngay | default | 2.0/1.5/1.2 |
+| **AUDJPY** | Asian -7 | 27/22 | 6 ngay | 3 pts | 2.3/1.7/1.3 |
+
+**TF auto-scaling:** Cac thong so tu dong dieu chinh theo TF:
+
+| Factor | M15 | M30 | H1 | H4 |
+|--------|-----|-----|----|----|
+| Zone lifespan | x0.60 | x0.80 | x1.00 | x1.30 |
+| Volume noise | +0.2 | +0.1 | 0 | 0 |
+| ADX noise | +3.0 | +1.5 | 0 | 0 |
+| Session effect | x1.15 | x1.0 | x1.0 | x1.0 |
+
+**Them cap tien moi:** Chi can them 1 block trong `BuildPairProfile()` (RP_Utils.mqh).
+Dinh nghia "ngay valid" tren H1 — tat ca TF tu adapt.
+
+### 1.9 Sweep Volume Qualification (P22c)
+
+Liquidity sweep gio co **volume tiered bonus** thay vi flat +20:
+
+| Volume tai sweep | Bonus | Y nghia |
+|-----------------|-------|---------|
+| > 2.0x MA20 | **+25** | Institutional sweep — rat manh |
+| > 1.5x MA20 | **+20** | Confirmed sweep — manh |
+| > 1.0x MA20 | **+12** | Average volume — vua |
+| < 1.0x MA20 | **Rejected** | Noise — khong phai sweep that |
+
+Sweep volume thap (< 1x MA20) bi loai bo hoan toan — tranh false signal tu thin market.
 
 ---
 

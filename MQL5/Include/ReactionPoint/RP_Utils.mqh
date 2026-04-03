@@ -901,6 +901,19 @@ void DetectPairType()
 }
 
 //+------------------------------------------------------------------+
+//| GetTFBarScale — bars-per-day ratio relative to H1 (24 bars/day)   |
+//|   M15 → 96 bars/day → scale = 96/24 = 4.0                        |
+//|   M30 → 48/24 = 2.0 | H1 → 1.0 | H4 → 0.25 | D1 → 0.042        |
+//| Used to scale bar-based profile params (age, decay) to current TF |
+//+------------------------------------------------------------------+
+double GetTFBarScale()
+{
+   int period_minutes = PeriodSeconds() / 60;
+   if(period_minutes <= 0) period_minutes = 60; // guard
+   return 60.0 / (double)period_minutes;        // H1-relative
+}
+
+//+------------------------------------------------------------------+
 //| BuildPairProfile — centralized pair-specific parameter tuning     |
 //|                                                                    |
 //| HOW TO ADD A NEW PAIR:                                             |
@@ -915,37 +928,92 @@ void DetectPairType()
 //|   - Each pair gets ONE definitive profile (most specific match)     |
 //|   - No multi-flag stacking — avoids unpredictable adj accumulation |
 //|   - Priority: specific cross > major pair > generic cross > default|
+//|                                                                    |
+//| TF scaling:                                                        |
+//|   max_age_bars: defined in "H1 days" then converted:               |
+//|     bars = days × bars_per_day × age_tf_mult                       |
+//|     age_tf_mult: M15=0.60, M30=0.80, H1=1.0, H4=1.30             |
+//|     (lower TF zones are smaller → break faster → shorter lifespan) |
+//|   decay_points: base × sqrt(tf_scale), min = base                  |
+//|     (lower TFs need more decay per interval to match time-based    |
+//|      aging, but not linear — sqrt dampens overscaling)             |
+//|   vol thresholds: base + vol_noise (M15: +0.2, M30: +0.1)         |
+//|   session_adj: base × session_scale (M15: ×1.15 for key sessions) |
+//|   ADX thresholds: base + adx_noise (M15: +3, M30: +1.5)            |
+//|                                                                    |
+//| Adding a new pair only requires thinking in H1 days — all TFs      |
+//| auto-adapt via these scaling factors.                               |
 //+------------------------------------------------------------------+
 void BuildPairProfile()
 {
    g_pair_profile.Init();
 
+   double tf_scale = GetTFBarScale();  // M15=4.0, M30=2.0, H1=1.0, H4=0.25
+
+   //--- Bars per day for current TF (used to convert days → bars)
+   //    M15: 96 bars/day | M30: 48 | H1: 24 | H4: 6 | D1: 1
+   double bars_per_day = 24.0 * tf_scale;
+
+   //--- Zone lifespan multiplier: M15 zones are smaller → they break/age faster
+   //    relative to the same pair on H1. This adjusts the "days valid" per TF.
+   //    M15: zones valid ~60% of H1 duration (noise + smaller zones)
+   //    M30: ~80% of H1 | H1: 100% (baseline) | H4: ~130% (larger zones hold longer)
+   double age_tf_mult = 1.0;
+   if(tf_scale >= 3.5)      age_tf_mult = 0.60;   // M15: zones live ~60% as long
+   else if(tf_scale >= 1.5)  age_tf_mult = 0.80;   // M30: zones live ~80% as long
+   else if(tf_scale <= 0.3)  age_tf_mult = 1.30;   // H4: zones live ~130% as long
+
    //=================================================================
    // SPECIFIC CROSSES — highest priority (most unique characteristics)
    //=================================================================
+
+   //--- M15 noise factor: lower TFs have noisier volume → raise thresholds
+   //    M15: +0.2 to vol thresholds | M30: +0.1 | H1+: 0
+   double vol_noise = 0.0;
+   if(tf_scale >= 3.5)      vol_noise = 0.2;   // M15 and below
+   else if(tf_scale >= 1.5)  vol_noise = 0.1;   // M30
+
+   //--- M15 ADX noise: ADX(14) reads ~3 pts higher on M15 due to
+   //    micro-volatility. Offset thresholds to compensate.
+   double adx_noise = 0.0;
+   if(tf_scale >= 3.5)      adx_noise = 3.0;   // M15
+   else if(tf_scale >= 1.5)  adx_noise = 1.5;   // M30
+
+   //--- M15 session adj scaling: on lower TFs, session transitions
+   //    have sharper impact (first 15min of London Open is 1 bar on M15
+   //    but only 1/4 of a bar on H1). Amplify session adj slightly.
+   double session_scale = 1.0;
+   if(tf_scale >= 3.5) session_scale = 1.15;   // M15: 15% stronger session effect
 
    if(g_is_cad_pair && g_is_jpy_pair)
    {
       //--- CADJPY: Oil-correlated carry cross. Strong trending, wide ATR.
       //    Zones break decisively. NY session dominant (oil + Canada data).
       //    Tokyo session has moderate JPY flows.
+      //    H1 ref: max_age=200 (~8.3 days), decay=4 pts/interval
       g_pair_profile.name = "CADJPY";
-      g_pair_profile.session_adj[0] = -6.0;   // Asian: JPY active but CAD quiet (net -16)
-      g_pair_profile.session_adj[1] = 0.0;    // London Open: neutral for this cross
-      g_pair_profile.session_adj[2] = 0.0;    // London: moderate, not primary
-      g_pair_profile.session_adj[3] = 10.0;   // NY Open: oil data + Canada economics (+20 total)
-      g_pair_profile.session_adj[4] = 7.0;    // NY: CAD active throughout (+12 total)
-      g_pair_profile.session_adj[5] = 3.0;    // Overlap: oil + London cross flows (+18 total)
-      g_pair_profile.session_adj[6] = 0.0;    // Dead: JPY partial offset (stays -20)
-      g_pair_profile.adx_strong     = 30.0;   // Trends harder — need higher bar for "strong"
-      g_pair_profile.adx_weak       = 23.0;   // Normal ranging has elevated ADX
-      g_pair_profile.decay_points   = 4;      // Zones drain faster
-      g_pair_profile.max_age_bars   = 200;    // Shorter zone lifespan
-      g_pair_profile.vol_extreme    = 2.5;    // Noisy tick volume — higher bar
-      g_pair_profile.vol_strong     = 1.8;
-      g_pair_profile.vol_above      = 1.4;
-      g_pair_profile.test_penalty_per = 7.0;  // Zones fail faster after 2 tests
-      g_pair_profile.test_2nd_score   = 2.0;  // 2nd test already weak
+      g_pair_profile.session_adj[0] = -6.0  * session_scale;  // Asian: JPY active but CAD quiet
+      g_pair_profile.session_adj[1] =  0.0;                   // London Open: neutral for this cross
+      g_pair_profile.session_adj[2] =  0.0;                   // London: moderate, not primary
+      g_pair_profile.session_adj[3] = 10.0  * session_scale;  // NY Open: oil data + Canada economics
+      g_pair_profile.session_adj[4] =  7.0  * session_scale;  // NY: CAD active throughout
+      g_pair_profile.session_adj[5] =  3.0;                   // Overlap: oil + London cross flows
+      g_pair_profile.session_adj[6] =  0.0;                   // Dead: JPY partial offset
+      g_pair_profile.adx_strong     = 30.0 + adx_noise;   // H1:30, M15:33
+      g_pair_profile.adx_weak       = 23.0 + adx_noise;   // H1:23, M15:26
+      //--- CADJPY: zones valid ~5 days on H1, scaled by TF
+      g_pair_profile.decay_points   = (int)MathMax(MathRound(4 * MathSqrt(tf_scale)), 4);  // H1:4, M15:8
+      g_pair_profile.max_age_bars   = (int)MathRound(5.0 * bars_per_day * age_tf_mult);
+      // H1: 5×24×1.0=120 | M15: 5×96×0.6=288 | H4: 5×6×1.3=39
+      g_pair_profile.vol_extreme    = 2.5 + vol_noise;  // H1:2.5 → M15:2.7
+      g_pair_profile.vol_strong     = 1.8 + vol_noise;
+      g_pair_profile.vol_above      = 1.4 + vol_noise;
+      g_pair_profile.test_penalty_per = 7.0;
+      g_pair_profile.test_2nd_score   = 2.0;
+      //--- CADJPY: noisy cross needs firmer breakout + higher ATR mult
+      g_pair_profile.breakout_confirm_pips = (tf_scale >= 3.5) ? 7 : 0;  // M15: 7 pips
+      g_pair_profile.initial_bars_to_scan  = (tf_scale >= 3.5) ? 400 : 0; // M15: ~4 days
+      g_pair_profile.reaction_atr_mult     = (tf_scale >= 3.5) ? 0.7 : 0.0; // M15: higher bar
       return;
    }
 
@@ -953,47 +1021,52 @@ void BuildPairProfile()
    {
       //--- GBPJPY: "The Beast". Extremely volatile cross.
       //    London session dominant (GBP), Tokyo has JPY flows.
-      //    Wider zones, faster decay. Volume relatively reliable (high liquidity cross).
+      //    H1 ref: max_age=180 (~7.5 days), decay=4 pts/interval
       g_pair_profile.name = "GBPJPY";
-      g_pair_profile.session_adj[0] = -3.0;   // Asian: JPY active, GBP quiet (net -13)
-      g_pair_profile.session_adj[1] = 8.0;    // London Open: GBP drives hard (+18 total)
-      g_pair_profile.session_adj[2] = 5.0;    // London: GBP dominant (+10 total)
-      g_pair_profile.session_adj[3] = 3.0;    // NY Open: moderate (+13 total)
-      g_pair_profile.session_adj[4] = 0.0;    // NY: average
-      g_pair_profile.session_adj[5] = 3.0;    // Overlap: still strong (+18 total)
-      g_pair_profile.session_adj[6] = -3.0;   // Dead: volatile pair (-23 total)
-      g_pair_profile.adx_strong     = 28.0;   // High volatility elevates ADX
-      g_pair_profile.adx_weak       = 22.0;
-      g_pair_profile.decay_points   = 4;      // Beast pair — zones age fast
-      g_pair_profile.max_age_bars   = 180;    // Even shorter lifespan
-      g_pair_profile.vol_extreme    = 2.2;    // Reasonably liquid cross
-      g_pair_profile.vol_strong     = 1.6;
-      g_pair_profile.vol_above      = 1.3;
-      g_pair_profile.test_penalty_per = 6.0;  // Zones break faster
+      g_pair_profile.session_adj[0] = -3.0  * session_scale;
+      g_pair_profile.session_adj[1] =  8.0  * session_scale;  // London Open: GBP drives hard
+      g_pair_profile.session_adj[2] =  5.0  * session_scale;  // London: GBP dominant
+      g_pair_profile.session_adj[3] =  3.0;
+      g_pair_profile.session_adj[4] =  0.0;
+      g_pair_profile.session_adj[5] =  3.0;
+      g_pair_profile.session_adj[6] = -3.0;
+      g_pair_profile.adx_strong     = 28.0 + adx_noise;   // H1:28, M15:31
+      g_pair_profile.adx_weak       = 22.0 + adx_noise;
+      //--- GBPJPY: zones valid ~4 days on H1 (beast pair, fast turnover)
+      g_pair_profile.decay_points   = (int)MathMax(MathRound(4 * MathSqrt(tf_scale)), 4);
+      g_pair_profile.max_age_bars   = (int)MathRound(4.0 * bars_per_day * age_tf_mult);
+      // H1: 4×24×1.0=96 | M15: 4×96×0.6=230 | H4: 4×6×1.3=31
+      g_pair_profile.vol_extreme    = 2.2 + vol_noise;
+      g_pair_profile.vol_strong     = 1.6 + vol_noise;
+      g_pair_profile.vol_above      = 1.3 + vol_noise;
+      g_pair_profile.test_penalty_per = 6.0;
       g_pair_profile.test_2nd_score   = 3.0;
+      g_pair_profile.breakout_confirm_pips = (tf_scale >= 3.5) ? 6 : 0;
+      g_pair_profile.reaction_atr_mult     = (tf_scale >= 3.5) ? 0.65 : 0.0;
       return;
    }
 
    if(g_is_aud_pair && g_is_jpy_pair)
    {
       //--- AUDJPY: Risk sentiment barometer. Commodity cross.
-      //    Correlated with equity markets and iron ore.
-      //    Asian session has meaning (AUD + JPY). NY moderate.
+      //    H1 ref: max_age=220 (~9.2 days), decay=3 pts/interval
       g_pair_profile.name = "AUDJPY";
-      g_pair_profile.session_adj[0] = 3.0;    // Asian: both AUD+JPY active (net -7)
-      g_pair_profile.session_adj[1] = 0.0;    // London Open: neutral
-      g_pair_profile.session_adj[2] = 0.0;    // London: neutral
-      g_pair_profile.session_adj[3] = 3.0;    // NY Open: risk sentiment moves (+13)
-      g_pair_profile.session_adj[4] = 0.0;    // NY: average
-      g_pair_profile.session_adj[5] = 0.0;    // Overlap: neutral for this cross
-      g_pair_profile.session_adj[6] = 3.0;    // Dead: less dead (JPY+AUD carry flows)
-      g_pair_profile.adx_strong     = 27.0;
-      g_pair_profile.adx_weak       = 22.0;
-      g_pair_profile.decay_points   = 3;
-      g_pair_profile.max_age_bars   = 220;
-      g_pair_profile.vol_extreme    = 2.3;
-      g_pair_profile.vol_strong     = 1.7;
-      g_pair_profile.vol_above      = 1.3;
+      g_pair_profile.session_adj[0] =  3.0;
+      g_pair_profile.session_adj[1] =  0.0;
+      g_pair_profile.session_adj[2] =  0.0;
+      g_pair_profile.session_adj[3] =  3.0;
+      g_pair_profile.session_adj[4] =  0.0;
+      g_pair_profile.session_adj[5] =  0.0;
+      g_pair_profile.session_adj[6] =  3.0;
+      g_pair_profile.adx_strong     = 27.0 + adx_noise;
+      g_pair_profile.adx_weak       = 22.0 + adx_noise;
+      //--- AUDJPY: zones valid ~6 days on H1 (moderate trending)
+      g_pair_profile.decay_points   = (int)MathMax(MathRound(3 * MathSqrt(tf_scale)), 3);
+      g_pair_profile.max_age_bars   = (int)MathRound(6.0 * bars_per_day * age_tf_mult);
+      // H1: 6×24×1.0=144 | M15: 6×96×0.6=346 | H4: 6×6×1.3=47
+      g_pair_profile.vol_extreme    = 2.3 + vol_noise;
+      g_pair_profile.vol_strong     = 1.7 + vol_noise;
+      g_pair_profile.vol_above      = 1.3 + vol_noise;
       g_pair_profile.test_penalty_per = 6.0;
       g_pair_profile.test_2nd_score   = 4.0;
       return;
@@ -1006,38 +1079,54 @@ void BuildPairProfile()
    if(g_is_gbp_pair && !g_is_cross_pair)
    {
       //--- GBPUSD: London-dominant major. Respects zones well.
-      //    Strong session bias — London Open is the key session.
-      //    Zones valid longer. Volume highly reliable.
+      //    H1 ref: max_age=280 (~11.7 days), decay=default
       g_pair_profile.name = "GBPUSD";
-      g_pair_profile.session_adj[0] = -8.0;   // Asian: GBP dead (net -18)
-      g_pair_profile.session_adj[1] = 8.0;    // London Open: THE session (+18 total)
-      g_pair_profile.session_adj[2] = 5.0;    // London: GBP dominant (+10 total)
-      g_pair_profile.session_adj[3] = 3.0;    // NY Open: continuation/reversal (+13)
-      g_pair_profile.session_adj[4] = 0.0;    // NY: moderate
-      g_pair_profile.session_adj[5] = 3.0;    // Overlap: still good (+18)
-      g_pair_profile.session_adj[6] = -5.0;   // Dead: avoid (net -25)
-      // ADX: standard — 0 means use input defaults (25/20)
-      g_pair_profile.max_age_bars   = 280;    // Zones last longer
-      // Volume: standard thresholds (deep liquidity)
-      // Test quality: standard (zones hold well)
+      g_pair_profile.session_adj[0] = -8.0  * session_scale;  // Asian: GBP dead
+      g_pair_profile.session_adj[1] =  8.0  * session_scale;  // London Open: THE session
+      g_pair_profile.session_adj[2] =  5.0  * session_scale;  // London: GBP dominant
+      g_pair_profile.session_adj[3] =  3.0;
+      g_pair_profile.session_adj[4] =  0.0;
+      g_pair_profile.session_adj[5] =  3.0;
+      g_pair_profile.session_adj[6] = -5.0;
+      //--- GBPUSD M15: ADX reads higher due to session spikes
+      if(adx_noise > 0.0)
+      {
+         g_pair_profile.adx_strong  = 25.0 + adx_noise;   // M15: 28
+         g_pair_profile.adx_weak    = 20.0 + adx_noise;   // M15: 23
+      }
+      //--- GBPUSD: zones valid ~8 days on H1 (respects zones well, stable)
+      g_pair_profile.max_age_bars   = (int)MathRound(8.0 * bars_per_day * age_tf_mult);
+      // H1: 8×24×1.0=192 | M15: 8×96×0.6=461 | H4: 8×6×1.3=62
+      g_pair_profile.vol_extreme    = 2.0 + vol_noise;
+      g_pair_profile.vol_strong     = 1.5 + vol_noise;
+      g_pair_profile.vol_above      = 1.2 + vol_noise;
+      //--- GBPUSD M15: cleaner reactions than crosses, moderate ATR adjustment
+      g_pair_profile.breakout_confirm_pips = (tf_scale >= 3.5) ? 5 : 0;  // M15: 5 pips
+      g_pair_profile.initial_bars_to_scan  = (tf_scale >= 3.5) ? 500 : 0; // M15: ~5 days
+      g_pair_profile.reaction_atr_mult     = (tf_scale >= 3.5) ? 0.6 : 0.0;
       return;
    }
 
    if(g_is_jpy_pair && !g_is_cross_pair)
    {
       //--- USDJPY: BOJ-driven. Tokyo session important.
-      //    Trends strongly on rate differentials. Respects round numbers.
+      //    H1 ref: max_age=250 (~10.4 days), decay=default
       g_pair_profile.name = "USDJPY";
-      g_pair_profile.session_adj[0] = 7.0;    // Asian: JPY primary session (net -3)
-      g_pair_profile.session_adj[1] = 3.0;    // London Open: moderate (+13)
-      g_pair_profile.session_adj[2] = 0.0;    // London: USD side
-      g_pair_profile.session_adj[3] = 5.0;    // NY Open: USD data (+15)
-      g_pair_profile.session_adj[4] = 0.0;    // NY: average
-      g_pair_profile.session_adj[5] = 0.0;    // Overlap: neutral
-      g_pair_profile.session_adj[6] = 5.0;    // Dead: JPY carry flows (net -15)
-      g_pair_profile.adx_strong     = 27.0;   // Trends on rate differentials
-      g_pair_profile.adx_weak       = 22.0;
-      g_pair_profile.max_age_bars   = 250;
+      g_pair_profile.session_adj[0] =  7.0;    // Asian: JPY primary session
+      g_pair_profile.session_adj[1] =  3.0;
+      g_pair_profile.session_adj[2] =  0.0;
+      g_pair_profile.session_adj[3] =  5.0;
+      g_pair_profile.session_adj[4] =  0.0;
+      g_pair_profile.session_adj[5] =  0.0;
+      g_pair_profile.session_adj[6] =  5.0;
+      g_pair_profile.adx_strong     = 27.0 + adx_noise;   // H1:27, M15:30
+      g_pair_profile.adx_weak       = 22.0 + adx_noise;   // H1:22, M15:25
+      //--- USDJPY: zones valid ~7 days on H1 (moderate trending)
+      g_pair_profile.max_age_bars   = (int)MathRound(7.0 * bars_per_day * age_tf_mult);
+      // H1: 7×24×1.0=168 | M15: 7×96×0.6=403 | H4: 7×6×1.3=55
+      g_pair_profile.vol_extreme    = 2.0 + vol_noise;
+      g_pair_profile.vol_strong     = 1.5 + vol_noise;
+      g_pair_profile.vol_above      = 1.2 + vol_noise;
       g_pair_profile.test_penalty_per = 5.0;
       g_pair_profile.test_2nd_score   = 4.0;
       return;
@@ -1046,15 +1135,21 @@ void BuildPairProfile()
    if(g_is_cad_pair && !g_is_cross_pair)
    {
       //--- USDCAD: Oil-correlated major. NY session dominant.
+      //    H1 ref: max_age=260 (~10.8 days), decay=default
       g_pair_profile.name = "USDCAD";
-      g_pair_profile.session_adj[0] = -3.0;   // Asian: CAD quiet (net -13)
-      g_pair_profile.session_adj[1] = 0.0;    // London Open: neutral
-      g_pair_profile.session_adj[2] = 0.0;    // London: neutral
-      g_pair_profile.session_adj[3] = 8.0;    // NY Open: oil + Canada data (+18)
-      g_pair_profile.session_adj[4] = 5.0;    // NY: CAD active (+10)
-      g_pair_profile.session_adj[5] = 3.0;    // Overlap: oil flows (+18)
-      g_pair_profile.session_adj[6] = 0.0;    // Dead: neutral
-      g_pair_profile.max_age_bars   = 260;
+      g_pair_profile.session_adj[0] = -3.0;
+      g_pair_profile.session_adj[1] =  0.0;
+      g_pair_profile.session_adj[2] =  0.0;
+      g_pair_profile.session_adj[3] =  8.0  * session_scale;  // NY Open: oil + Canada data
+      g_pair_profile.session_adj[4] =  5.0  * session_scale;  // NY: CAD active
+      g_pair_profile.session_adj[5] =  3.0;
+      g_pair_profile.session_adj[6] =  0.0;
+      //--- USDCAD: zones valid ~7 days on H1 (oil-driven, moderate)
+      g_pair_profile.max_age_bars   = (int)MathRound(7.0 * bars_per_day * age_tf_mult);
+      // H1: 7×24×1.0=168 | M15: 7×96×0.6=403 | H4: 7×6×1.3=55
+      g_pair_profile.vol_extreme    = 2.0 + vol_noise;
+      g_pair_profile.vol_strong     = 1.5 + vol_noise;
+      g_pair_profile.vol_above      = 1.2 + vol_noise;
       return;
    }
 
@@ -1065,18 +1160,26 @@ void BuildPairProfile()
    if(g_is_cross_pair)
    {
       g_pair_profile.name = "CROSS";
-      g_pair_profile.session_adj[5] = -5.0;   // Overlap less meaningful for crosses
-      g_pair_profile.session_adj[6] = 5.0;    // Dead less impactful
-      g_pair_profile.vol_extreme    = 2.3;    // Cross pairs: higher volume bar
-      g_pair_profile.vol_strong     = 1.7;
-      g_pair_profile.vol_above      = 1.3;
+      g_pair_profile.session_adj[5] = -5.0;
+      g_pair_profile.session_adj[6] = 5.0;
+      g_pair_profile.vol_extreme    = 2.3 + vol_noise;
+      g_pair_profile.vol_strong     = 1.7 + vol_noise;
+      g_pair_profile.vol_above      = 1.3 + vol_noise;
       g_pair_profile.test_penalty_per = 6.0;
       g_pair_profile.test_2nd_score   = 4.0;
       return;
    }
 
-   //--- DEFAULT: no pair-specific overrides (EURUSD, etc.)
-   //    All values stay at Init() defaults — modules use preset/input values.
+   //=================================================================
+   // DEFAULT — no pair-specific overrides (EURUSD, etc.)
+   //=================================================================
+   //    Apply M15 volume noise factor even for default pairs
+   if(vol_noise > 0.0)
+   {
+      g_pair_profile.vol_extreme += vol_noise;
+      g_pair_profile.vol_strong  += vol_noise;
+      g_pair_profile.vol_above   += vol_noise;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1121,9 +1224,28 @@ void ApplyVolatilityScaling()
       if(g_spread_block_multiplier < 4.0) g_spread_block_multiplier = 4.0;
    }
 
+   //--- M15/M30 ADX noise compensation (P22b)
+   //    ADX(14) reads ~3 pts higher on M15, ~1.5 on M30 due to micro-volatility.
+   //    Applied to preset defaults BEFORE profile override, so pairs without
+   //    explicit ADX in their profile still get the M15 correction.
+   {
+      double tf_sc = GetTFBarScale();
+      double adx_tf_noise = 0.0;
+      if(tf_sc >= 3.5)      adx_tf_noise = 3.0;   // M15
+      else if(tf_sc >= 1.5)  adx_tf_noise = 1.5;   // M30
+      if(adx_tf_noise > 0.0)
+      {
+         g_adx_strong_threshold += adx_tf_noise;
+         g_adx_weak_threshold   += adx_tf_noise;
+      }
+   }
+
    //--- Apply pair profile overrides (P22b)
    //    All pair-specific tuning is centralized in g_pair_profile.
-   //    Only override when profile specifies non-zero values.
+   //    Profile values are already TF-scaled (bar-based params × tf_scale).
+   //    Only override when profile specifies non-zero/non-default values.
+   //    ADX: profile values include adx_noise, so MathMax ensures the higher
+   //    of (preset+tf_noise) vs (pair_base+adx_noise) wins.
    if(g_pair_profile.adx_strong > 0.0)
       g_adx_strong_threshold = MathMax(g_adx_strong_threshold, g_pair_profile.adx_strong);
    if(g_pair_profile.adx_weak > 0.0)
@@ -1131,21 +1253,24 @@ void ApplyVolatilityScaling()
    if(g_pair_profile.decay_points > 0)
       g_decay_points_per_interval = MathMax(g_decay_points_per_interval, g_pair_profile.decay_points);
    if(g_pair_profile.max_age_bars > 0)
-   {
-      // Trending pairs → cap age (shorter). Stable pairs → floor age (longer).
-      if(g_pair_profile.max_age_bars < g_max_rp_age_bars)
-         g_max_rp_age_bars = g_pair_profile.max_age_bars;  // Trending: cap down
-      else
-         g_max_rp_age_bars = g_pair_profile.max_age_bars;  // Stable: floor up
-   }
+      g_max_rp_age_bars = g_pair_profile.max_age_bars;  // Already TF-scaled
    if(g_pair_profile.min_score_override > 0)
       g_min_score_to_show = g_pair_profile.min_score_override;
+
+   //--- Zone detection overrides (P22b)
+   if(g_pair_profile.breakout_confirm_pips > 0)
+      g_breakout_confirm_pips = g_pair_profile.breakout_confirm_pips;
+   if(g_pair_profile.initial_bars_to_scan > 0)
+      g_initial_bars_to_scan = g_pair_profile.initial_bars_to_scan;
+   if(g_pair_profile.reaction_atr_mult > 0.0)
+      g_reaction_atr_multiplier = g_pair_profile.reaction_atr_mult;
 
    Print("RP: ATR ratio=", DoubleToString(ratio, 2),
          " | Profile=", g_pair_profile.name,
          " | MinDist=", g_min_rp_distance_pips,
          " | BreakConf=", g_breakout_confirm_pips,
-         " | MergePips=", g_confluence_merge_pips,
+         " | Scan=", g_initial_bars_to_scan,
+         " | ReactATR=", DoubleToString(g_reaction_atr_multiplier, 2),
          " | ADX=", DoubleToString(g_adx_strong_threshold, 1),
             "/", DoubleToString(g_adx_weak_threshold, 1),
          " | MaxAge=", g_max_rp_age_bars,
