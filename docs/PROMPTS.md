@@ -1,6 +1,6 @@
 # REACTION POINT INDICATOR v3.3 — IMPLEMENTATION PROMPTS (Optimized)
 
-**19 files (1 main `.mq5` + 18 `.mqh`) | 8 phases | 36 prompts**
+**19 files (1 main `.mq5` + 18 `.mqh`) | 8 phases | 37 prompts**
 **Mỗi prompt = 1 session riêng. Paste prompt + HEADER nếu cần.**
 
 ---
@@ -29,7 +29,7 @@ Phase 4: P11, P12, P13              (Advanced — cần Phase 2+3)
 Phase 5: P14, P15, P16              (UI — cần Phase 4)
 Phase 6: P17                        (Main — tổng hợp)
 Phase 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-Phase 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance)
+Phase 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance) → P37(Breaker)
 ```
 
 ---
@@ -202,12 +202,14 @@ SReactionPoint {
    bool has_fvg;  bool has_fvg_bullish;  // FVG overlap detection
    // P36:
    bool has_imbalance;  // Imbalance candle at zone formation
+   // P37:
+   bool is_breaker_block;  // OB broken by impulse + retested from opposite side
 
    Init(): ZeroMemory + confluence_id=-1, ob_bar_index=-1,
            zone_high_original=0, zone_low_original=0, has_wick_filter=false,
            strong_test_count=0, weak_test_count=0, test_vol_index=0,
            is_order_block=false, ArrayInitialize(test_volumes,0),
-           has_fvg=false, has_fvg_bullish=false, has_imbalance=false
+           has_fvg=false, has_fvg_bullish=false, has_imbalance=false, is_breaker_block=false
 }
 
 SConfluenceZone {
@@ -475,6 +477,7 @@ PERFORMANCE: gọi mỗi 5 phút (300s), KHÔNG mỗi bar. Exponential backoff k
    - Gap qua RP: tính breakout (mạnh), KHÔNG tính test
    - Retest (sau breakout, trong max_retest_bars) → Role Reversal:
      flip type, +15 score, is_role_reversed=true, tách khỏi confluence, alert cấp 3
+     P37: if is_order_block + breakout body >= 0.8×ATR → is_breaker_block=true, +10 bonus thêm
    - Test: touch zone + no breakout → test_count++
      P25a classify: body entered zone → strong_test_count++, else weak_test_count++
      P25b track volume: test_volumes[test_vol_index%4] = iVolume(1)
@@ -578,6 +581,7 @@ CalcFinalScore(rp_index):
     + CalcAbsorptionAdj(rp_index)           // P25b: [-10, +5]
     + CalcFVGBonus(rp_index)               // P34: [0, +15] FVG overlap
     + (is_role_reversed ? 15.0 : 0.0)
+    + (is_breaker_block && is_role_reversed ? 10.0 : 0.0)  // P37: Breaker Block bonus
     // NOTE: First touch bonus removed — CalcTestQualityScore handles fresh premium (+10) via P35
 
   rp.final_score = MathMax(0, MathMin(adjusted, SCORE_CAP))
@@ -1183,6 +1187,33 @@ Range: [0, +8]
 
 ---
 
+### P37: Breaker Block Detection (sửa RP_Detection.mqh + RP_Scoring.mqh)
+
+```
+ICT Concept: Breaker Block = Order Block bị phá bởi impulse mạnh, sau đó được retest từ phía đối diện.
+Khác role reversal thường: (1) phải là OB zone, (2) breakout phải impulsive (body >= 0.8×ATR).
+Breaker Block có xác suất reversal cao hơn role reversal thường ~5-10%.
+
+Detection (2 bước):
+  STEP 1 — HandleBreakout (khi OB zone bị phá):
+    if is_order_block AND breakout candle body >= 0.8 × g_cached_atr14:
+      rp.is_breaker_block = true  // candidate
+      Keep zone active (không deactivate) để chờ retest
+
+  STEP 2 — CheckRoleReversalRetest (khi price quay lại retest):
+    Role reversal confirmed → is_role_reversed = true
+    is_breaker_block vẫn giữ true → scoring áp dụng bonus
+
+Scoring (trong CalcFinalScore):
+  - Role reversal: +15 (existing)
+  - Breaker Block (is_breaker_block && is_role_reversed): +10 thêm
+  - Tổng cho Breaker Block: +25 (15 + 10)
+
+Range: [0, +10] (trên cơ sở role reversal)
+```
+
+---
+
 ### P32: Adaptive Swing Lookback (sửa RP_Detection.mqh)
 
 ```
@@ -1369,6 +1400,15 @@ HTF Nesting Bonus chi tiết:
 | 22 | Defines | **SCORE_CAP**: 150 → 200 — more headroom for differentiation | **HIGH**: confluence zones no longer cluster at cap |
 | 23 | Utils | **ClassifyRPLevel**: Premium >=120 (was 110), LV1 >=85 (was 80) | **MEDIUM**: proportional threshold adjustment |
 
+#### Breaker Block Detection (P37)
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 24 | Defines | SReactionPoint: +is_breaker_block | **LOW**: data structure |
+| 25 | Detection | **HandleBreakout**: OB + body>=0.8×ATR → breaker candidate, keep active | **HIGH**: institutional reversal signal |
+| 26 | Detection | **CheckRoleReversalRetest**: breaker flag preserved on role reversal confirm | **MEDIUM**: flow integration |
+| 27 | Scoring | CalcFinalScore: +10 bonus for confirmed breaker block (on top of +15 role reversal) | **HIGH**: +25 total reversal score |
+
 ---
 
 ## THỨ TỰ THỰC THI
@@ -1381,7 +1421,7 @@ PHASE 4: P11, P12, P13
 PHASE 5: P14, P15, P16 → compile test P1-P16
 PHASE 6: P17
 PHASE 7: P18+P19 → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27 → P28
-PHASE 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance)
+PHASE 8: P29 → P30 → P32 → P33 → P34(FVG) → P35(Mitigation) → P36(Imbalance) → P37(Breaker)
 ```
 
 ---
