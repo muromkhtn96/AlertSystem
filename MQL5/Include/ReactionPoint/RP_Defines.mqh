@@ -84,6 +84,8 @@ struct SReactionPoint
    int              weak_test_count;       // P25a: wick-only touch tests (low quality)
    double           test_volumes[4];       // P25b: tick volume at last 4 tests (circular)
    int              test_vol_index;        // P25b: next write index for test_volumes
+   bool             has_fvg;              // P34: FVG detected near zone
+   bool             has_fvg_bullish;      // P34: FVG direction (true=bullish, false=bearish)
 
    void Init()
    {
@@ -125,6 +127,8 @@ struct SReactionPoint
       weak_test_count      = 0;
       ArrayInitialize(test_volumes, 0.0);
       test_vol_index       = 0;
+      has_fvg              = false;
+      has_fvg_bullish      = false;
    }
 };
 

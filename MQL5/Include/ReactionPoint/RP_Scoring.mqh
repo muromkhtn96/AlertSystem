@@ -297,34 +297,40 @@ double CalcZonePrecisionScore(int rp_index)
 }
 
 //+------------------------------------------------------------------+
-//| CalcTestQualityScore — weighted test count (P25a)                 |
-//| Replaces flat test_count scoring with quality-aware scoring       |
-//| Range: [0, 25]                                                    |
+//| CalcTestQualityScore — mitigation-aware test scoring (P25a+P35)   |
+//|                                                                    |
+//| Concept: each touch DRAINS liquidity from the zone (ICT principle) |
+//|   Touch 0 (fresh):  +10 (first touch premium — untested supply/demand)|
+//|   Touch 1 (first):  +12 (confirmed zone — strongest signal)        |
+//|   Touch 2 (second): +5  (still valid but liquidity depleting)      |
+//|   Touch 3+:         -5 per touch (zone being mitigated/absorbed)   |
+//|                                                                    |
+//| Strong tests (body rejection) count as 1.0                         |
+//| Weak tests (wick only) count as 0.5                                |
+//| Range: [-15, +12]                                                  |
 //+------------------------------------------------------------------+
 double CalcTestQualityScore(int rp_index)
 {
    if(rp_index < 0 || rp_index >= g_rp_count) return 0.0;
    SReactionPoint rp = g_rp_array[rp_index];
 
-   // Weighted test count: strong = 1.0, weak = 0.3
-   double weighted = (double)rp.strong_test_count + (double)rp.weak_test_count * 0.3;
+   // Weighted test count: strong = 1.0, weak = 0.5
+   double weighted = (double)rp.strong_test_count + (double)rp.weak_test_count * 0.5;
 
-   // Scoring curve: similar to original but using weighted count
-   // 0: 0, 0.3-1: 5, 1.3-2: 12, 2-3: 20, 3+: declining
-   if(weighted < 0.1)  return 0.0;
-   if(weighted < 1.1)  return 5.0;
-   if(weighted < 2.1)  return 12.0;
-   if(weighted < 3.1)  return 20.0;
+   // Fresh zone (never tested): first touch premium
+   if(weighted < 0.1)  return 10.0;
 
-   // 3+ weighted: bonus for strong-dominant, penalty for weak-dominant
-   double strong_ratio = (rp.test_count > 0) ?
-      (double)rp.strong_test_count / (double)rp.test_count : 0.0;
+   // First meaningful test: zone confirmed by price action
+   if(weighted < 1.5)  return 12.0;
 
-   if(strong_ratio >= 0.7)
-      return 25.0;  // Mostly body rejections = very reliable zone (+5 bonus)
+   // Second test: still valid but depleting
+   if(weighted < 2.5)  return 5.0;
 
-   // Mixed or mostly weak: standard declining curve
-   return MathMax(20.0 - (weighted - 3.0) * 5.0, 5.0);
+   // 3+ tests: mitigation penalty — zone liquidity draining
+   // Each additional weighted test beyond 2 costs -5 points
+   double excess = weighted - 2.0;
+   double penalty = excess * 5.0;
+   return MathMax(-15.0, 5.0 - penalty);
 }
 
 //+------------------------------------------------------------------+
@@ -438,6 +444,12 @@ void CalcFinalScore(int rp_index)
    // Calculate base score
    rp.base_score = CalcBaseScore(rp_index);
 
+   //--- FVG overlap check (writes to g_rp_array directly)
+   CheckZoneFVGOverlap(rp_index);
+   //--- Sync FVG flags back to local copy (prevent write-back overwrite)
+   rp.has_fvg         = g_rp_array[rp_index].has_fvg;
+   rp.has_fvg_bullish = g_rp_array[rp_index].has_fvg_bullish;
+
    double adjusted = rp.base_score
       + GetRegimeScoreAdj(rp.rp_type)                 // Module A: [-30, +20]
       - CalcDecayPenalty(rp_index)                     // Module B: [0, -35+]
@@ -449,8 +461,10 @@ void CalcFinalScore(int rp_index)
       + GetTrendAlignmentScore(rp.rp_type)             // Multi-TF: [-25, +20] (P20)
       + CalcHTFNestingBonus(rp_index)                  // HTF nesting: [0, +30]
       + CalcAbsorptionAdj(rp_index)                    // P25b: [-10, +5]
-      + (rp.is_role_reversed ? 15.0 : 0.0)            // Role reversal bonus
-      + ((rp.is_fresh && rp.test_count == 0) ? 10.0 : 0.0); // First touch bonus
+      + CalcFVGBonus(rp_index)                         // P34: FVG overlap [0, +15]
+      + (rp.is_role_reversed ? 15.0 : 0.0);            // Role reversal bonus
+      // NOTE: First touch bonus removed — CalcTestQualityScore now handles
+      //       fresh zone premium (+10) as part of mitigation-aware scoring (P35)
 
    adjusted = MathMax(adjusted, 0.0);
 
