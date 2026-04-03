@@ -265,28 +265,28 @@ void ApplyTFPreset()
    switch(preset)
    {
       case PRESET_M15:
-         g_swing_lookback            = 7;     // 105 min window — filters M15 noise
-         g_min_rp_distance_pips      = 15;    // Tighter spacing for lower volatility
+         g_swing_lookback            = 5;     // Was 7 — faster swing detection for entry timing
+         g_min_rp_distance_pips      = 20;    // Was 15 — prevent zone clutter near entry
          g_min_reaction_move_pips    = 15;    // Higher floor — rejects wick noise
-         g_initial_bars_to_scan      = 1000;  // More bars (denser candles)
-         g_breakout_confirm_pips     = 2;     // Faster confirmation
-         g_max_retest_bars           = 50;    // Wider retest window
-         g_decay_interval_bars       = 60;    // ~15 hrs (proportional to M30's 7.5 hrs)
-         g_decay_points_per_interval = 1;     // Gentle decay — zones live longer
-         g_max_rp_age_bars           = 500;   // ~5 days (proportional to M30's ~4 days)
+         g_initial_bars_to_scan      = 800;   // Was 1000 — 2 days enough for M15 entry
+         g_breakout_confirm_pips     = 3;     // Was 2 — slightly firmer to avoid false breaks
+         g_max_retest_bars           = 40;    // Was 50 — tighter retest window for entry
+         g_decay_interval_bars       = 30;    // Was 60 — faster decay: entry zones age fast
+         g_decay_points_per_interval = 2;     // Was 1 — stronger decay for entry TF
+         g_max_rp_age_bars           = 300;   // Was 500 — ~3 days max (entry zones expire faster)
          g_sl_buffer_pips            = 2;
          g_entry_buffer_pips         = 1;
-         g_max_setup_age_bars        = 10;
-         g_confluence_merge_pips     = 12;    // Wider merge — M15 zones naturally closer
+         g_max_setup_age_bars        = 8;     // Was 10 — faster entry invalidation
+         g_confluence_merge_pips     = 10;    // Was 12 — tighter merge for precision
          g_htf_bars_to_scan          = 200;
-         g_fibo_lookback_bars        = 100;
-         g_fibo_tolerance_pips       = 4;
-         g_min_candle_size_pips      = 3;     // Stricter — filters small M15 bodies
+         g_fibo_lookback_bars        = 80;    // Was 100 — focus on recent fibo structure
+         g_fibo_tolerance_pips       = 3;     // Was 4 — tighter fibo match for entry precision
+         g_min_candle_size_pips      = 4;     // Was 3 — skip noise candles
          g_zone_width_pips           = 3;
-         g_min_score_to_show         = 55;    // Stricter threshold
-         g_proximity_alert_pips      = 12;
-         g_reset_alert_pips          = 18;
-         g_structure_lookback_bars   = 50;    // More local structure context
+         g_min_score_to_show         = 75;    // Was 55 — entry requires high quality zones
+         g_proximity_alert_pips      = 10;    // Was 12 — tighter alert for entry timing
+         g_reset_alert_pips          = 15;    // Was 18 — faster alert reset
+         g_structure_lookback_bars   = 40;    // Was 50 — focus on recent structure
          g_htf_1                     = PERIOD_H1;
          g_htf_2                     = PERIOD_H4;
          break;
@@ -346,25 +346,25 @@ void ApplyTFPreset()
          break;
 
       case PRESET_H4:
-         g_swing_lookback            = 3;
-         g_min_rp_distance_pips      = 20;
-         g_min_reaction_move_pips    = 20;
+         g_swing_lookback            = 4;     // Stronger swings than before (was 3)
+         g_min_rp_distance_pips      = 50;    // Wider spacing for H4 (was 20)
+         g_min_reaction_move_pips    = 25;    // Stronger reaction required (was 20)
          g_initial_bars_to_scan      = 300;
-         g_breakout_confirm_pips     = 8;
+         g_breakout_confirm_pips     = 10;    // Firmer breakout (was 8)
          g_max_retest_bars           = 40;
-         g_decay_interval_bars       = 25;
-         g_decay_points_per_interval = 2;
-         g_max_rp_age_bars           = 200;
+         g_decay_interval_bars       = 15;    // Faster decay (was 25)
+         g_decay_points_per_interval = 3;     // Stronger penalty (was 2)
+         g_max_rp_age_bars           = 180;   // Tighter age limit (was 200)
          g_sl_buffer_pips            = 8;
          g_entry_buffer_pips         = 3;
          g_max_setup_age_bars        = 10;
-         g_confluence_merge_pips     = 15;
+         g_confluence_merge_pips     = 20;    // Wider merge for H4 (was 15)
          g_htf_bars_to_scan          = 150;
          g_fibo_lookback_bars        = 100;
          g_fibo_tolerance_pips       = 8;
-         g_min_candle_size_pips      = 5;
+         g_min_candle_size_pips      = 8;     // Skip small H4 candles (was 5)
          g_zone_width_pips           = 6;
-         g_min_score_to_show         = 40;
+         g_min_score_to_show         = 80;    // Only quality zones (was 40)
          g_proximity_alert_pips      = 30;
          g_reset_alert_pips          = 40;
          g_structure_lookback_bars   = 50;

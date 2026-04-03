@@ -466,7 +466,8 @@ void CalcFinalScore(int rp_index)
       + CalcHTFNestingBonus(rp_index)                  // HTF nesting: [0, +30]
       + CalcAbsorptionAdj(rp_index)                    // P25b: [-10, +5]
       + CalcFVGBonus(rp_index)                         // P34: FVG overlap [0, +15]
-      + (rp.is_role_reversed ? 15.0 : 0.0);            // Role reversal bonus
+      + (rp.is_role_reversed ? 15.0 : 0.0)             // Role reversal bonus
+      + (rp.is_breaker_block && rp.is_role_reversed ? 10.0 : 0.0); // P37: Breaker Block bonus
       // NOTE: First touch bonus removed — CalcTestQualityScore now handles
       //       fresh zone premium (+10) as part of mitigation-aware scoring (P35)
 

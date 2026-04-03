@@ -580,6 +580,7 @@ void DetectSwingPoints(int bars_to_scan)
 
 //+------------------------------------------------------------------+
 //| Handle confirmed breakout — start role reversal monitoring        |
+//| P37: If OB zone broken by impulsive candle → potential Breaker    |
 //+------------------------------------------------------------------+
 void HandleBreakout(int rp_index, int current_bar)
 {
@@ -589,8 +590,24 @@ void HandleBreakout(int rp_index, int current_bar)
    rp.time_last_tested = TimeCurrent();
    rp.is_fresh         = false;
 
+   //--- P37: Breaker Block candidate — OB broken by impulsive move
+   //    Impulse = breakout candle body >= 0.8 × ATR (strong institutional move)
+   //    Only OB-based zones qualify (swing-based zones use regular role reversal)
+   if(rp.is_order_block && g_cached_atr14 > 0.0)
+   {
+      double bo_open  = iOpen(_Symbol, PERIOD_CURRENT, 1);
+      double bo_close = RP_Close(1);
+      if(bo_open > 0.0 && bo_close > 0.0)
+      {
+         double bo_body = MathAbs(bo_close - bo_open);
+         if(bo_body >= g_cached_atr14 * 0.8)
+            rp.is_breaker_block = true;  // Confirmed on retest in CheckRoleReversalRetest
+      }
+   }
+
    //--- Deactivate broken RP if not in confluence (confluence zones get role-reversal chance)
-   if(!rp.is_confluence)
+   //    P37: Keep breaker block candidates active for retest monitoring
+   if(!rp.is_confluence && !rp.is_breaker_block)
       rp.is_active = false;
 
    g_rp_array[rp_index] = rp;
@@ -647,6 +664,8 @@ void CheckRoleReversalRetest(int rp_index, int current_bar,
    // Role reversal confirmed
    rp.rp_type = (rp.rp_type == RP_SUPPORT) ? RP_RESISTANCE : RP_SUPPORT;
    rp.is_role_reversed = true;
+   //--- P37: Breaker Block confirmed if candidate was set during HandleBreakout
+   //    (is_breaker_block stays true — scoring will apply bonus)
    rp.test_count = 0;
    rp.strong_test_count = 0;       // P25a: reset quality counters
    rp.weak_test_count   = 0;       // P25a: reset quality counters

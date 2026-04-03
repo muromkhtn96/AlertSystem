@@ -30,11 +30,11 @@ int GetLevelAlpha(ENUM_RP_LEVEL level)
 {
    switch(level)
    {
-      case RP_PREMIUM: return 90;   // Strong, clearly visible
-      case RP_LEVEL1:  return 70;   // Visible
-      case RP_LEVEL2:  return 45;   // Moderate
-      case RP_LEVEL3:  return 30;   // Subtle but present
-      default:         return 20;
+      case RP_PREMIUM: return 45;   // Subtle fill — edges carry the visual weight
+      case RP_LEVEL1:  return 30;   // Light
+      case RP_LEVEL2:  return 20;   // Very light
+      case RP_LEVEL3:  return 15;   // Barely visible
+      default:         return 10;
    }
 }
 
@@ -45,8 +45,8 @@ int GetEdgeWidth(ENUM_RP_LEVEL level)
 {
    switch(level)
    {
-      case RP_PREMIUM: return 3;
-      case RP_LEVEL1:  return 2;
+      case RP_PREMIUM: return 2;    // Clean edges, not overly thick
+      case RP_LEVEL1:  return 1;
       case RP_LEVEL2:  return 1;
       default:         return 1;
    }
@@ -61,31 +61,14 @@ color GetZoneBaseColor(int rp_index)
    SReactionPoint rp = g_rp_array[rp_index];
 
    if(rp.is_role_reversed) return g_color_role_reversal;
-   if(rp.is_confluence)    return g_color_confluence;
 
-   // Type-aware coloring: support = teal family, resistance = coral family
+   //--- All zones use type-aware color (blue=demand, red=supply)
+   //    Confluence/Premium get same color as base type — clean, consistent
+   //    Level differences handled by alpha/edge width, not color
    if(rp.rp_type == RP_SUPPORT)
-   {
-      switch(rp.rp_level)
-      {
-         case RP_PREMIUM: return g_color_premium;
-         case RP_LEVEL1:  return g_color_support;
-         case RP_LEVEL2:  return g_color_support;
-         case RP_LEVEL3:  return g_color_support;
-         default:         return clrGray;
-      }
-   }
+      return g_color_support;      // Blue for all demand zones
    else
-   {
-      switch(rp.rp_level)
-      {
-         case RP_PREMIUM: return g_color_premium;
-         case RP_LEVEL1:  return g_color_resistance;
-         case RP_LEVEL2:  return g_color_resistance;
-         case RP_LEVEL3:  return g_color_resistance;
-         default:         return clrGray;
-      }
-   }
+      return g_color_resistance;   // Red for all supply zones
 }
 
 //+------------------------------------------------------------------+
@@ -122,9 +105,11 @@ void DrawRPZone(int rp_index)
    string name_top  = OBJECT_PREFIX + "EDGE_H_" + id_str;
    string name_bot  = OBJECT_PREFIX + "EDGE_L_" + id_str;
 
-   //--- Time range: from formed to future
-   datetime time_start = rp.time_formed;
+   //--- Time range: limit visual length to max 100 bars back (clean chart)
+   //    Old zones don't need to stretch to original formation time
    datetime time_end   = TimeCurrent() + PeriodSeconds() * 20;
+   datetime max_lookback = TimeCurrent() - PeriodSeconds() * 100;
+   datetime time_start = (rp.time_formed > max_lookback) ? rp.time_formed : max_lookback;
 
    //--- Color with opacity decay
    color fg = GetZoneBaseColor(rp_index);
@@ -224,6 +209,11 @@ void DrawRPZone(int rp_index)
 void DrawConfluenceGlow(int conf_index)
 {
    if(conf_index < 0 || conf_index >= g_confluence_count) return;
+
+   //--- Skip glow when only Premium is shown — zone edges are sufficient
+   if(g_show_premium && !g_show_level1 && !g_show_level2 && !g_show_level3)
+      return;
+
    SConfluenceZone zone = g_confluence_array[conf_index];
 
    //--- Only for zones with 3+ RPs
@@ -403,26 +393,18 @@ void DrawRPLabel(int rp_index)
    //--- Position: center of zone, adjusted to avoid collision
    double label_price = AdjustLabelPrice((rp.zone_high + rp.zone_low) / 2.0);
 
-   //--- Build label: LEVEL | TYPE SCORE | TF | Tested:Nx | Status
-   string status_str;
-   if(rp.is_role_reversed)
-      status_str = "RoleRev";
-   else if(rp.is_fresh)
-      status_str = "Fresh";
-   else if(rp.display_opacity < 99.0)
-   {
-      int decay_pct = (int)MathRound(100.0 - rp.display_opacity);
-      status_str = "Decay:-" + IntegerToString(decay_pct);
-   }
-   else
-      status_str = "Active";
+   //--- Build label: compact, professional — "S 142" or "R 128 BB"
+   string dir_str = (rp.rp_type == RP_SUPPORT) ? "S" : "R";
+   string score_str = DoubleToString(rp.final_score, 0);
 
-   string type_str = rp.is_confluence ? "CONFLUENCE" :
-                     (rp.rp_type == RP_SUPPORT ? "SUPPORT" : "RESISTANCE");
+   //--- Tags: only show special status (keep clean)
+   string tag = "";
+   if(rp.is_breaker_block && rp.is_role_reversed)  tag = " BB";
+   else if(rp.is_role_reversed)                     tag = " RR";
+   else if(rp.has_fvg)                              tag = " FVG";
+   else if(rp.is_confluence)                        tag = " C";
 
-   string full_text = GetLevelIcon(rp.rp_level) + " | " + type_str + " " +
-                      DoubleToString(rp.final_score, 0) + " | " +
-                      TFToString(rp.source_tf) + " | " + status_str;
+   string full_text = dir_str + " " + score_str + tag;
 
    //--- Position label at right edge of zone (future end) + small offset
    datetime label_time = TimeCurrent() + PeriodSeconds() * 21;
@@ -439,8 +421,8 @@ void DrawRPLabel(int rp_index)
    }
 
    ObjectSetString(0, name, OBJPROP_TEXT, full_text);
-   ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, g_label_font_size);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, g_label_font_size + 1);
    ObjectSetInteger(0, name, OBJPROP_COLOR, GetRPColor(rp_index));
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
@@ -627,6 +609,29 @@ void RedrawChangedRP()
 
    //--- Suppress weaker overlapping zones (keep strongest per overlap group)
    SuppressOverlappingZones();
+
+   //--- Permanently deactivate zones suppressed for too long (free up slots)
+   //    If a zone has been display-suppressed for 50+ bars, it's permanently eclipsed
+   static int g_suppressed_count[];
+   if(ArraySize(g_suppressed_count) < MAX_RP_COUNT)
+   {
+      ArrayResize(g_suppressed_count, MAX_RP_COUNT);
+      ArrayInitialize(g_suppressed_count, 0);
+   }
+   for(int s = 0; s < g_rp_count; s++)
+   {
+      if(g_rp_display_suppressed[s])
+         g_suppressed_count[s]++;
+      else
+         g_suppressed_count[s] = 0;
+
+      if(g_suppressed_count[s] >= 50 && g_rp_array[s].is_active && !g_rp_array[s].is_confluence)
+      {
+         g_rp_array[s].is_active = false;
+         g_rp_dirty[s] = true;
+         g_suppressed_count[s] = 0;
+      }
+   }
 
    //--- Extend time_end for all active zones every call (lightweight)
    //    This ensures zones always reach current candle + 20 bars ahead,

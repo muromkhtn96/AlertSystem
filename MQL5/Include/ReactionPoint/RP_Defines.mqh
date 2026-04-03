@@ -87,6 +87,7 @@ struct SReactionPoint
    bool             has_fvg;              // P34: FVG detected near zone
    bool             has_fvg_bullish;      // P34: FVG direction (true=bullish, false=bearish)
    bool             has_imbalance;        // P36: imbalance candle at/near zone formation
+   bool             is_breaker_block;     // P37: OB broken by impulse + retested from opposite side
 
    void Init()
    {
@@ -131,6 +132,7 @@ struct SReactionPoint
       has_fvg              = false;
       has_fvg_bullish      = false;
       has_imbalance        = false;
+      is_breaker_block     = false;
    }
 };
 
