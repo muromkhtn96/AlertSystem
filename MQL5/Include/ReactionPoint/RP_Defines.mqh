@@ -86,6 +86,7 @@ struct SReactionPoint
    int              test_vol_index;        // P25b: next write index for test_volumes
    bool             has_fvg;              // P34: FVG detected near zone
    bool             has_fvg_bullish;      // P34: FVG direction (true=bullish, false=bearish)
+   bool             has_imbalance;        // P36: imbalance candle at/near zone formation
 
    void Init()
    {
@@ -129,6 +130,7 @@ struct SReactionPoint
       test_vol_index       = 0;
       has_fvg              = false;
       has_fvg_bullish      = false;
+      has_imbalance        = false;
    }
 };
 
