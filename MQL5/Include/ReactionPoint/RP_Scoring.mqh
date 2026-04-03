@@ -197,11 +197,14 @@ double CalcVolumeScore(int bar_shift, ENUM_SESSION session_formed)
 
    double vol_ratio = (double)tick_vol / adjusted_ma20;
 
-   // Gradient scoring instead of binary thresholds
-   if(vol_ratio > 2.0) return 15.0;       // Extreme volume spike
-   if(vol_ratio > 1.5) return 12.0;       // Strong volume
-   if(vol_ratio > 1.2) return 8.0;        // Above average
-   if(vol_ratio > 1.0) return 3.0;        // Slightly above average
+   //--- Pair-specific volume thresholds from profile (P22b)
+   //    Cross pairs have noisier tick volume — higher thresholds.
+   //    Majors (GBPUSD) have reliable tick volume — standard thresholds.
+   //    All values set in BuildPairProfile(), no scattered if-blocks.
+   if(vol_ratio > g_pair_profile.vol_extreme) return 15.0;  // Extreme volume spike
+   if(vol_ratio > g_pair_profile.vol_strong)  return 12.0;  // Strong volume
+   if(vol_ratio > g_pair_profile.vol_above)   return 8.0;   // Above average
+   if(vol_ratio > 1.0)                        return 3.0;   // Slightly above average
    return 0.0;
 }
 
@@ -385,14 +388,18 @@ double CalcZonePrecisionScore(int rp_index)
 //| CalcTestQualityScore — mitigation-aware test scoring (P25a+P35)   |
 //|                                                                    |
 //| Concept: each touch DRAINS liquidity from the zone (ICT principle) |
-//|   Touch 0 (fresh):  +10 (first touch premium — untested supply/demand)|
+//|   Touch 0 (fresh):  +10 (first touch premium — untested S/D)      |
 //|   Touch 1 (first):  +12 (confirmed zone — strongest signal)        |
-//|   Touch 2 (second): +5  (still valid but liquidity depleting)      |
-//|   Touch 3+:         -5 per touch (zone being mitigated/absorbed)   |
+//|   Touch 2 (second): pair-dependent (5 default, 2 for CADJPY...)   |
+//|   Touch 3+:         pair-dependent penalty per excess test         |
 //|                                                                    |
 //| Strong tests (body rejection) count as 1.0                         |
 //| Weak tests (wick only) count as 0.5                                |
 //| Range: [-15, +12]                                                  |
+//|                                                                    |
+//| Pair tuning via g_pair_profile:                                    |
+//|   test_2nd_score   — score at 2nd test (trending pairs: lower)     |
+//|   test_penalty_per — penalty per excess test (trending: harsher)   |
 //+------------------------------------------------------------------+
 double CalcTestQualityScore(int rp_index)
 {
@@ -408,14 +415,14 @@ double CalcTestQualityScore(int rp_index)
    // First meaningful test: zone confirmed by price action
    if(weighted < 1.5)  return 12.0;
 
-   // Second test: still valid but depleting
-   if(weighted < 2.5)  return 5.0;
+   // Second test: pair-dependent via profile
+   double second_score = g_pair_profile.test_2nd_score;
+   if(weighted < 2.5)  return second_score;
 
-   // 3+ tests: mitigation penalty — zone liquidity draining
-   // Each additional weighted test beyond 2 costs -5 points
-   double excess = weighted - 2.0;
-   double penalty = excess * 5.0;
-   return MathMax(-15.0, 5.0 - penalty);
+   // 3+ tests: mitigation penalty — pair-dependent severity
+   double excess  = weighted - 2.0;
+   double penalty = excess * g_pair_profile.test_penalty_per;
+   return MathMax(-15.0, second_score - penalty);
 }
 
 //+------------------------------------------------------------------+

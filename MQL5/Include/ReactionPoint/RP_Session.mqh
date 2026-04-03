@@ -184,25 +184,11 @@ double GetSessionScoreAdj(ENUM_SESSION session)
       case SESSION_DEAD:        adj = -20.0; break;
    }
 
-   //--- Pair-specific adjustments (P22)
-   if(g_is_gbp_pair)
-   {
-      if(session == SESSION_LONDON_OPEN) adj += 5.0;  // GBP reacts strongly at London Open
-      if(session == SESSION_LONDON)      adj += 3.0;  // GBP active throughout London
-      if(session == SESSION_ASIAN)       adj -= 5.0;  // GBP Asian zones unreliable (-10 → -15)
-   }
-
-   if(g_is_jpy_pair)
-   {
-      if(session == SESSION_ASIAN) adj += 7.0;  // JPY active in Asian (-10 → -3)
-      if(session == SESSION_DEAD)  adj += 5.0;  // Less dead for JPY (-20 → -15)
-   }
-
-   if(g_is_cross_pair)
-   {
-      if(session == SESSION_DEAD)    adj += 5.0;  // Crosses less session-dependent
-      if(session == SESSION_OVERLAP) adj -= 5.0;  // Overlap less meaningful for crosses (+15 → +10)
-   }
+   //--- Pair-specific adjustments (P22b)
+   //    Reads from centralized g_pair_profile — no stacking, no ambiguity.
+   //    Each pair has ONE definitive session_adj[] array.
+   //    Index maps: 0=Asian, 1=LondonOpen, 2=London, 3=NYOpen, 4=NY, 5=Overlap, 6=Dead
+   adj += g_pair_profile.session_adj[(int)session];
 
    return adj;
 }
