@@ -118,7 +118,7 @@ color g_color_support = C'60,180,130';  color g_color_resistance = C'200,90,90';
 
 ### Cached Values (update 1 lần/bar)
 ```cpp
-double g_cached_atr14 = 0, g_cached_atr14_ma50 = 0, g_cached_volume_ma20 = 0;
+double g_cached_atr14 = 0, g_cached_atr14_smooth = 0, g_cached_atr14_ma50 = 0, g_cached_volume_ma20 = 0;
 int    g_cached_bar_index = -1;
 double g_cached_fibo_high = 0, g_cached_fibo_low = 0;
 double g_cached_fibo_618 = 0, g_cached_fibo_500 = 0, g_cached_fibo_382 = 0;
@@ -254,6 +254,7 @@ RP_Low(shift):   tương tự iLow
 === UpdateBarCache() — gọi đầu OnCalculate khi IsNewBar() ===
 - Guard: if(current_bar == g_cached_bar_index) return
 - g_cached_atr14 = CalcATR(14,1). Guard NaN/zero → fallback PipsToPrice(10)
+- g_cached_atr14_smooth: EMA(g_cached_atr14, period=10, alpha=2/11). Seed=first raw value. Dùng cho scoring
 - g_cached_atr14_ma50: rolling buffer[50], SMA
 - g_cached_volume_ma20: rolling buffer[20], dùng iVolume(1)
 - UpdateFiboCache()
@@ -533,7 +534,8 @@ PERFORMANCE: CalcBaseScore CHỈ gọi khi g_rp_dirty[rp_index]==true. Dùng cac
 
 CalcBaseScore(rp_index): tổng 6+2 thành phần:
 
-  a) Reaction Strength (max 35): MathMin((reaction_pips / atr_pips) * 35.0, 35.0)
+  a) Reaction Strength (max 35): MathMin((reaction_pips / atr_smooth_pips) * 35.0, 35.0)
+     Dùng g_cached_atr14_smooth (EMA) thay vì raw ATR — tránh spike penalty
   b) Test Quality ([-15, +12]): P25a+P35 CalcTestQualityScore — mitigation-aware
      weighted = strong×1.0 + weak×0.5
      <0.1→+10 (fresh premium) | <1.5→+12 (confirmed) | <2.5→+5 (depleting) | 3+→5-excess×5 (floor -15)
@@ -545,9 +547,9 @@ CalcBaseScore(rp_index): tổng 6+2 thành phần:
      adjusted_ma20 = g_cached_volume_ma20 × GetSessionVolumeMultiplier(session)
      (Overlap/LondonOpen/NYOpen=1.0, London/NY=1.05, Asian=0.70, Dead=0.60)
      vol_ratio: >2.0→15, >1.5→12, >1.2→8, >1.0→3, else→0
-  f) Round Number (max 8): dist to x.x000/x.x500: <=10p→8, <=20p→4, else→0
-  g) Volume Delta (±5): SUPPORT buying>selling×1.3→+5, ngược→-5
-  h) P24d CalcZonePrecisionScore ([-5,+13]): P27b linear gradient:
+  f) Round Number (max 8): major(000): <=10p→8, <=20p→5 | minor(500): <=10p→5, <=20p→3 | else→0
+  g) Volume Delta (±5): SUPPORT + bullish candle→+5, bearish→-5 | RESISTANCE ngược lại
+  h) P24d CalcZonePrecisionScore ([-5,+13]): P27b linear gradient (dùng g_cached_atr14_smooth):
      width_ratio <= 0.15→+5 | ≤0.30→5→2 | ≤0.55→2→0 | ≤0.80→0→-2 | ≤1.20→-2→-5 | >1.20→-5
      + retest-refined (shrunk>=15%): +5 | + wick_filter: +3
   i) P36 Imbalance candle (+8): has_imbalance → +8. Detected in CreateRP: body>=70% range + vol>1.5×MA20
@@ -1351,6 +1353,14 @@ HTF Nesting Bonus chi tiết:
 | 16 | Defines | SReactionPoint: +has_imbalance | **LOW**: data structure |
 | 17 | Detection | **Imbalance detection** in CreateRP: body>=70% + vol>1.5×MA20 at zone_bar±1 | **HIGH**: institutional urgency |
 | 18 | Scoring | CalcBaseScore: +8 pts for has_imbalance | **MEDIUM**: better zone differentiation |
+
+#### ATR Smoothing (spike-resistant scoring)
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 19 | Utils | **g_cached_atr14_smooth**: EMA(period=10) of ATR14, updated per bar | **HIGH**: stable scoring baseline |
+| 20 | Scoring | CalcBaseScore reaction strength uses smoothed ATR | **HIGH**: no spike-induced score swing |
+| 21 | Scoring | CalcZonePrecisionScore width_ratio uses smoothed ATR | **HIGH**: consistent zone quality grading |
 
 ---
 
