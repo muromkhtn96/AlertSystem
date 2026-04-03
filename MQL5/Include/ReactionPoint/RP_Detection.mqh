@@ -296,13 +296,27 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
          return;
    }
 
-   // Check distance from existing RPs
+   // Check distance from existing RPs — ATR-adaptive minimum spacing
+   // Uses the larger of: fixed pips setting OR ATR × 0.6 (H1+) / ATR × 0.4 (M15/M30)
+   double atr_dist_mult = (tf_cur <= PERIOD_M30) ? 0.4 : 0.6;
+   double atr_min_dist  = (g_cached_atr14 > 0.0) ? PriceToPips(g_cached_atr14) * atr_dist_mult : 0.0;
+   double effective_min_dist = MathMax((double)g_min_rp_distance_pips, atr_min_dist);
+
    for(int i = 0; i < g_rp_count; i++)
    {
       if(!g_rp_array[i].is_active) continue;
       double dist = MathAbs(g_rp_array[i].price - price);
-      if(PriceToPips(dist) < g_min_rp_distance_pips)
-         return;
+      if(PriceToPips(dist) < effective_min_dist)
+      {
+         // If new zone has stronger reaction, replace the weaker existing zone
+         if(reaction_pips > g_rp_array[i].initial_reaction_pips * 1.5)
+         {
+            g_rp_array[i].is_active = false;
+            g_rp_dirty[i] = true;
+            break; // Allow creation to proceed — weak zone deactivated
+         }
+         return; // Existing zone is strong enough — skip new zone
+      }
    }
 
    // Handle array full — evict
@@ -405,6 +419,10 @@ void CreateRP(ENUM_RP_TYPE rp_type, int bar_index, double price,
    double atr_multiplier = 1.0;
    if(tf_cur <= PERIOD_M15)
       atr_multiplier = 0.5;
+   else if(tf_cur <= PERIOD_M30)
+      atr_multiplier = 0.6;
+   else if(tf_cur <= PERIOD_H1)
+      atr_multiplier = 0.55;   // Tighter H1 zones for cleaner chart
    else if(tf_cur <= PERIOD_H4)
       atr_multiplier = 0.7;
    else

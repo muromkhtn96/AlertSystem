@@ -113,8 +113,8 @@ void DrawRPZone(int rp_index)
    SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
 
-   //--- Level filter: skip zones below minimum display level
-   if(rp.rp_level > g_show_min_level)
+   //--- Level filter: skip zones whose level is toggled off
+   if(!IsLevelVisible(rp.rp_level))
       return;
 
    string id_str    = IntegerToString(rp.id);
@@ -396,7 +396,7 @@ void DrawRPLabel(int rp_index)
    SReactionPoint rp = g_rp_array[rp_index];
    if(!rp.is_active) return;
    if(rp.final_score < g_min_score_to_show) return;
-   if(rp.rp_level > g_show_min_level) return;
+   if(!IsLevelVisible(rp.rp_level)) return;
 
    string name = OBJECT_PREFIX + "LBL_" + IntegerToString(rp.id);
 
@@ -540,11 +540,11 @@ void SuppressOverlappingZones()
    }
    ArrayInitialize(g_rp_display_suppressed, false);
 
-   //--- Use ATR-based margin: zones within 0.5×ATR of each other are "overlapping"
-   //    This catches visually close zones that pips-based margin misses
+   //--- Use ATR-based margin: zones within 0.8×ATR of each other are "overlapping"
+   //    Aggressive suppression ensures clean chart with well-spaced zones
    double atr = g_cached_atr14;
    if(atr <= 0.0) atr = PipsToPrice(20);
-   double overlap_margin = atr * 0.5;
+   double overlap_margin = atr * 0.8;
 
    for(int i = 0; i < g_rp_count; i++)
    {
@@ -559,11 +559,15 @@ void SuppressOverlappingZones()
          if(g_rp_array[j].final_score < g_min_score_to_show) continue;
 
          //--- Check price overlap (zones touch or within ATR-based margin)
-         bool overlaps = (g_rp_array[i].zone_low <= g_rp_array[j].zone_high + overlap_margin) &&
-                         (g_rp_array[j].zone_low <= g_rp_array[i].zone_high + overlap_margin);
+         //    Same-type zones use wider margin (1.2×ATR) — they are redundant
+         bool same_type = (g_rp_array[i].rp_type == g_rp_array[j].rp_type);
+         double eff_margin = same_type ? overlap_margin * 1.5 : overlap_margin;
+
+         bool overlaps = (g_rp_array[i].zone_low <= g_rp_array[j].zone_high + eff_margin) &&
+                         (g_rp_array[j].zone_low <= g_rp_array[i].zone_high + eff_margin);
          if(!overlaps) continue;
 
-         //--- Determine winner: premium first, then score
+         //--- Determine winner: premium first, then score, then freshness
          int winner = i, loser = j;
          bool i_premium = (g_rp_array[i].rp_level == RP_PREMIUM);
          bool j_premium = (g_rp_array[j].rp_level == RP_PREMIUM);

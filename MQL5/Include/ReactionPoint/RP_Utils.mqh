@@ -79,7 +79,11 @@ int    g_fibo_tolerance_pips      = 5;
 int    g_min_candle_size_pips     = 3;
 int    g_zone_width_pips          = 4;
 int    g_min_score_to_show        = 40;
-ENUM_RP_LEVEL g_show_min_level    = RP_PREMIUM;  // Min level to display on chart
+ENUM_RP_LEVEL g_show_min_level    = RP_PREMIUM;  // Backward compat — computed from toggles
+bool   g_show_premium             = true;         // Show Premium zones
+bool   g_show_level1              = false;        // Show Level 1 zones
+bool   g_show_level2              = false;        // Show Level 2 zones
+bool   g_show_level3              = false;        // Show Level 3 zones
 bool   g_enable_system_alert       = false;
 bool   g_enable_push_notify       = false;
 int    g_proximity_alert_pips     = 20;
@@ -697,6 +701,21 @@ ENUM_RP_LEVEL ClassifyRPLevel(double score)
    if(score >= 60.0)  return RP_LEVEL2;
    if(score >= 40.0)  return RP_LEVEL3;
    return RP_HIDDEN;
+}
+
+//+------------------------------------------------------------------+
+//| IsLevelVisible — check if a level is enabled via toggle inputs    |
+//+------------------------------------------------------------------+
+bool IsLevelVisible(ENUM_RP_LEVEL level)
+{
+   switch(level)
+   {
+      case RP_PREMIUM: return g_show_premium;
+      case RP_LEVEL1:  return g_show_level1;
+      case RP_LEVEL2:  return g_show_level2;
+      case RP_LEVEL3:  return g_show_level3;
+      default:         return false;
+   }
 }
 
 //+------------------------------------------------------------------+

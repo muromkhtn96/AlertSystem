@@ -112,7 +112,10 @@ input ENUM_TIMEFRAMES  HTF_2                  = PERIOD_D1;  // Higher TF 2
 //--- Display
 input int              Zone_Width_Pips        = 4;       // Zone width in pips
 input int              Min_Score_To_Show      = 40;      // Min score to display
-input ENUM_RP_LEVEL    Show_Min_Level         = RP_PREMIUM; // Min level to show (PRE/LV1/LV2/LV3)
+input bool             Show_Premium           = true;    // Show Premium zones (score>=110)
+input bool             Show_Level1            = false;   // Show Level 1 zones (score>=80)
+input bool             Show_Level2            = false;   // Show Level 2 zones (score>=60)
+input bool             Show_Level3            = false;   // Show Level 3 zones (score>=40)
 input bool             Show_Dashboard         = true;    // Show dashboard
 input bool             Show_Performance_Stats = true;    // Show hit rate stats
 input bool             Enable_System_Alert    = false;   // Enable Alert() popup
@@ -190,7 +193,17 @@ void ApplyTFPreset()
       g_show_session_background= false;
       g_show_performance_stats = false;
    }
-   g_show_min_level          = Show_Min_Level;
+   //--- Level toggle inputs
+   g_show_premium  = Show_Premium;
+   g_show_level1   = Show_Level1;
+   g_show_level2   = Show_Level2;
+   g_show_level3   = Show_Level3;
+
+   //--- Compute g_show_min_level for backward compat (lowest enabled level)
+   if(g_show_level3)       g_show_min_level = RP_LEVEL3;
+   else if(g_show_level2)  g_show_min_level = RP_LEVEL2;
+   else if(g_show_level1)  g_show_min_level = RP_LEVEL1;
+   else                    g_show_min_level = RP_PREMIUM;
    g_dashboard_corner        = Dashboard_Corner;
    g_dashboard_font_size     = Dashboard_Font_Size;
    g_label_font_size         = Label_Font_Size;
@@ -305,25 +318,25 @@ void ApplyTFPreset()
          break;
 
       case PRESET_H1:
-         g_swing_lookback            = 4;
-         g_min_rp_distance_pips      = 20;
-         g_min_reaction_move_pips    = 15;
+         g_swing_lookback            = 5;     // Stronger swings: require 5 bars each side
+         g_min_rp_distance_pips      = 40;    // Wider spacing: no cluttered zones
+         g_min_reaction_move_pips    = 20;    // Stronger reaction required
          g_initial_bars_to_scan      = 500;
-         g_breakout_confirm_pips     = 5;
+         g_breakout_confirm_pips     = 7;     // Firmer breakout confirmation
          g_max_retest_bars           = 50;
-         g_decay_interval_bars       = 20;
-         g_decay_points_per_interval = 2;
-         g_max_rp_age_bars           = 300;
+         g_decay_interval_bars       = 15;    // Faster decay: remove stale zones sooner
+         g_decay_points_per_interval = 3;     // Stronger decay penalty
+         g_max_rp_age_bars           = 250;   // Shorter max age
          g_sl_buffer_pips            = 5;
          g_entry_buffer_pips         = 2;
          g_max_setup_age_bars        = 10;
-         g_confluence_merge_pips     = 10;
+         g_confluence_merge_pips     = 15;    // Wider merge: absorb nearby zones
          g_htf_bars_to_scan          = 200;
          g_fibo_lookback_bars        = 100;
          g_fibo_tolerance_pips       = 5;
-         g_min_candle_size_pips      = 3;
+         g_min_candle_size_pips      = 5;     // Skip small candles on H1
          g_zone_width_pips           = 4;
-         g_min_score_to_show         = 40;
+         g_min_score_to_show         = 80;    // Only show LV1+ quality zones
          g_proximity_alert_pips      = 20;
          g_reset_alert_pips          = 30;
          g_structure_lookback_bars   = 50;
