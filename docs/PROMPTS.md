@@ -98,7 +98,8 @@ bool   g_use_spread_filter = true;  double g_spread_alert_multiplier = 2.0;  dou
 bool   g_use_market_structure = true;  int g_structure_lookback_bars = 50;
 bool   g_use_confluence_zones = true;
 bool   g_show_entry_setup = true;  double g_min_rr_ratio = 1.5;
-bool   g_alert_only_active_sessions = true;
+bool   g_enable_system_alert = false;  bool g_enable_push_notify = false;
+bool   g_alert_only_active_sessions = true;  bool g_clean_chart_mode = false;
 bool   g_show_dashboard = true;  bool g_show_performance_stats = true;
 ENUM_DASH_CORNER g_dashboard_corner = DASH_TOP_LEFT;  int g_dashboard_font_size = 9;
 bool   g_show_htf_1 = true, g_show_htf_2 = true;
@@ -107,13 +108,18 @@ bool   g_use_trend_alignment = true;  // P20
 bool   g_is_jpy_pair = false, g_is_gbp_pair = false, g_is_cross_pair = false;  // P22
 ```
 
-### Display Colors
+### Display Colors (v3.3: 2-color system — blue demand, red supply)
 ```cpp
-color g_color_premium = C'255,200,60';  color g_color_level1 = C'220,80,80';
-color g_color_level2 = C'200,140,60';   color g_color_level3 = C'100,160,210';
-color g_color_confluence = C'160,120,220';  color g_color_role_reversal = C'200,100,200';
-color g_color_entry_buy = C'60,200,120';  color g_color_entry_sell = C'220,70,70';
-color g_color_support = C'60,180,130';  color g_color_resistance = C'200,90,90';  // P28
+color g_color_support = C'50,160,220';      // Blue — all demand zones
+color g_color_resistance = C'220,80,80';    // Red — all supply zones
+color g_color_premium = C'255,210,80';      // Gold accent (unused in zone fill)
+color g_color_level1 = C'180,180,180';      // Neutral gray
+color g_color_level2 = C'140,140,140';      // Dim gray
+color g_color_level3 = C'110,110,110';      // Faint gray
+color g_color_confluence = C'200,180,80';   // Muted gold
+color g_color_role_reversal = C'180,140,60';// Warm amber
+color g_color_entry_buy = C'60,200,120';    // Mint green
+color g_color_entry_sell = C'220,70,70';    // Soft red
 ```
 
 ### Cached Values (update 1 lần/bar)
@@ -225,7 +231,7 @@ SEntrySetup {
    double entry_price, sl_price, tp1_price, tp2_price;
    double rr_ratio1, rr_ratio2, sl_pips, tp1_pips, tp2_pips;
    int bar_created;  datetime time_created;
-   bool is_active, is_invalidated, is_triggered;
+   bool is_active, is_invalidated, is_triggered, is_preferred;
 }
 
 SRPStats {
@@ -713,12 +719,13 @@ KHÔNG lưu file. Reset khi reload.
 ```
 === COLOR SYSTEM ===
 BlendColor(fg, bg, alpha_pct) cho OBJ_RECTANGLE.
-P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
+P28 alpha: PREMIUM=45, LV1=30, LV2=20, LV3=15 (v3.3: subtle fill, edges carry visual weight)
 
 === FUNCTIONS ===
 
-1. GetRPColor(rp_index): role_rev→RoleRev | confluence→Confluence | level→corresponding color
-   P28: GetZoneBaseColor: Support→teal, Resistance→coral, Premium→gold bất kể type
+1. GetRPColor(rp_index): role_rev→amber | else→type color
+   P28: GetZoneBaseColor: Support→blue(50,160,220), Resistance→red(220,80,80)
+   v3.3: All levels same color per type — differentiation via alpha/edge, not color
 
 2. DrawRPZone(rp_index):
    - **Level toggle (v3.2→v3.3)**: IsLevelVisible(rp_level) — 4 individual toggles, default: only Premium ON
@@ -729,9 +736,10 @@ P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
 3. DrawConfluenceGlow(conf_index): 3+ RP → 3 chồng rectangles (14%, 30%, 50%)
    - **v3.2**: skip glow if all component RPs are display-suppressed
 
-4. DrawRPLabel(rp_index): v3.2 compact format
-   - PRE | CONFLUENCE 150 | H1 | Fresh  (removed "Tested:Nx")
-   - Level icons: PRE / LV1 / LV2 / LV3
+4. DrawRPLabel(rp_index): v3.3 minimal format
+   - Format: "S 142 FVG" or "R 128 BB" (direction + score + tag)
+   - Tags: BB=Breaker, RR=RoleRev, FVG=FairValueGap, C=Confluence, ""=normal
+   - Font: Arial Bold, size=g_label_font_size+1
    - **v3.2**: label positioned at right edge of zone (+21 bars, ANCHOR_LEFT)
    - v3.0.2: collision tracking — nudge nếu < 1.5× zone_width_pips
 
@@ -743,6 +751,10 @@ P28 alpha: PREMIUM=55, LV1=40, LV2=28, LV3=18
    - **v3.3 SuppressOverlappingZones()**: ATR×0.8 margin (same-type: ATR×1.2), keep strongest
      g_rp_display_suppressed[] + g_prev_suppressed[] for state change detection
      Suppressed zones: objects deleted, auto-restored when winner expires
+     v3.3: zones suppressed 50+ bars → permanently deactivated (free slots)
+   - **v3.3 Zone visual**: time_start = max(time_formed, now-100bars) — no long trailing zones
+   - **v3.3 Glow skip**: Premium-only mode → confluence glow disabled (clean chart)
+   - **v3.3 Edge width**: Premium=2px (was 3), softer fill alpha
    - CHỈ vẽ lại RP có state thay đổi (static prev arrays compare)
 9. DeleteRPObjects(rp_id): zone + label + glow + edges
 10. DeleteAllObjects(): ObjectsDeleteAll(0, OBJECT_PREFIX)
@@ -994,30 +1006,30 @@ REASON_CHARTCHANGE/RECOMPILE/REMOVE → full reset
 === OnChartEvent === CHARTEVENT_CHART_CHANGE → RepositionDashboard + UpdateFontSizes
 === OnTimer === Flash toggle, decrement flash_count
 
-=== TF PRESET TABLE (v3.3: H1 optimized for clean premium zones) ===
+=== TF PRESET TABLE (v3.3: M15 entry-optimized, H1+H4 clean premium) ===
 Param                    M15    M30    H1    H4     D1
-Swing_Lookback            7      5     5      3      3
-Min_RP_Distance_Pips     15     25    40     20     40
-Min_Reaction_Move_Pips   15     12    20     20     40
-Initial_Bars_To_Scan   1000    600   500    300    200
-Breakout_Confirm_Pips     2      3     7      8     15
-Max_Retest_Bars          50     40    50     40     30
-Decay_Interval_Bars      60     15    15     25     10
-Decay_Points/Interval     1      3     3      2      3
-Max_RP_Age_Bars         500    200   250    200    100
+Swing_Lookback            5      5     5      4      3
+Min_RP_Distance_Pips     20     25    40     50     40
+Min_Reaction_Move_Pips   15     12    20     25     40
+Initial_Bars_To_Scan    800    600   500    300    200
+Breakout_Confirm_Pips     3      3     7     10     15
+Max_Retest_Bars          40     40    50     40     30
+Decay_Interval_Bars      30     15    15     15     10
+Decay_Points/Interval     2      3     3      3      3
+Max_RP_Age_Bars         300    200   250    180    100
 SL_Buffer_Pips            2      3     5      8     15
 Entry_Buffer_Pips         1      1     2      3      5
-Max_Setup_Age_Bars       10      8    10     10      5
-Confluence_Merge_Pips    12      8    15     15     25
+Max_Setup_Age_Bars        8      8    10     10      5
+Confluence_Merge_Pips    10      8    15     20     25
 HTF_Bars_To_Scan        200    200   200    150    100
-Fibo_Lookback_Bars      100     80   100    100     60
-Fibo_Tolerance_Pips       4      3     5      8     12
-Min_Candle_Size_Pips      3      2     5      5     10
+Fibo_Lookback_Bars       80     80   100    100     60
+Fibo_Tolerance_Pips       3      3     5      8     12
+Min_Candle_Size_Pips      4      2     5      8     10
 Zone_Width_Pips           3      3     4      6     10
-Min_Score_To_Show        55     50    80     40     35
-Proximity_Alert_Pips     12     15    20     30     50
-Reset_Alert_Pips         18     20    30     40     60
-Structure_Lookback       50     30    50     50     80
+Min_Score_To_Show        75     50    80     80     35
+Proximity_Alert_Pips     10     15    20     30     50
+Reset_Alert_Pips         15     20    30     40     60
+Structure_Lookback       40     30    50     50     80
 HTF_1                    H1     H1    H4     D1     W1
 HTF_2                    H4     H4    D1     W1    MN1
 
