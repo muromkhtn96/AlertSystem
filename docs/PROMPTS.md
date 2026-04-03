@@ -175,7 +175,7 @@ ENUM_STRUCTURE_STATE { STRUCTURE_BULLISH, STRUCTURE_BEARISH, STRUCTURE_NONE }
 === CONSTANTS ===
 #define MAX_RP_COUNT 200 | MAX_CHART_OBJECTS 250 | MAX_CONFLUENCE 50
 #define MAX_SETUPS 10 | MAX_FLASH_RP 3 | MAX_HTF_RETRIES 3
-#define OBJECT_PREFIX "RP_" | SCORE_CAP 150.0 | MAX_ZONE_RPS 8
+#define OBJECT_PREFIX "RP_" | SCORE_CAP 200.0 | MAX_ZONE_RPS 8
 
 === STRUCTS ===
 
@@ -274,7 +274,7 @@ RP_Low(shift):   tương tự iLow
 10. RegimeToString(r): REGIME_STRONG_TREND→"STRONG TREND"...
 11. DashCornerToAnchor(c): → ENUM_ANCHOR_POINT
 12. GetSpreadColor(cur, avg): >3x→clrRed, >2x→clrYellow, else→clrWhite
-13. ClassifyRPLevel(score): >=110→PREMIUM, 80-109→L1, 60-79→L2, 40-59→L3, <40→HIDDEN
+13. ClassifyRPLevel(score): >=120→PREMIUM, 85-119→L1, 60-84→L2, 40-59→L3, <40→HIDDEN
 14. InitIndicatorHandles(): tạo g_handle_adx + g_handle_atr. Check INVALID_HANDLE
 15. ReleaseIndicatorHandles(): IndicatorRelease cả 2
 15b. RevalidateHandles(): mỗi 100 bars, re-create nếu invalid
@@ -312,7 +312,7 @@ Lưu ý: File này KHÔNG chứa logic nghiệp vụ, chỉ globals + helpers.
 
 3. IsChoppyMarket(): return g_current_regime == REGIME_CHOPPY
    Khi CHOPPY: ẩn entry, không alert cấp 1-2, opacity -50%, "Avoid trading"
-   NGOẠI LỆ: Premium Confluence (>=110) VẪN alert + hiển thị bình thường
+   NGOẠI LỆ: Premium Confluence (>=120) VẪN alert + hiển thị bình thường
 ```
 
 ---
@@ -661,10 +661,10 @@ v3.2: CalcHTFNestingBonus(rp_index): [0, +30]
    ALL must true:
    a) Close[1] trong zone
    b) Bar[1] pattern hợp lệ (DetectCandlePattern(1))
-   c) !CHOPPY (ngoại lệ: Premium >=110)
+   c) !CHOPPY (ngoại lệ: Premium >=120)
    d) !g_spread_blocked
    e) !g_news_blackout
-   f) P20: IsTrendAligned (ngoại lệ: Premium >=110)
+   f) P20: IsTrendAligned (ngoại lệ: Premium >=120)
    → CreateEntrySetup()
 
 2. CreateEntrySetup(rp_index):
@@ -761,17 +761,17 @@ Early exit: skip RP nếu all alert_sent[]==true.
 | 1 | Giá cách RP <= proximity_pips VÀ đang đi VỀ PHÍA RP | "Approaching [PAIR]..." |
 | 2 | Bar[1] pattern tại zone | "RP REACTION..." |
 | 3 | Role Reversal confirmed | "ROLE REVERSAL..." |
-| 4 | Confluence Premium >=110 | "PREMIUM..." |
+| 4 | Confluence Premium >=120 | "PREMIUM..." |
 
 Filters: Dead session→skip(if flag), News→block cấp 1-2, Spread→block cấp 2
-NGOẠI LỆ: Premium >=110 LUÔN alert
+NGOẠI LỆ: Premium >=120 LUÔN alert
 
 === FUNCTIONS ===
 1. CheckAllAlerts(): loop active RP, early exit, check 4→3→2→1
 2. CheckProximityAlert(rp): distance + direction check (close[1] vs close[2])
 3. CheckReactionAlert(rp): bar[1] trong zone + pattern (dùng cached, KHÔNG re-detect)
 4. CheckRoleReversalAlert(rp): is_role_reversed && !alert_sent[2]
-5. CheckPremiumAlert(rp): score>=110 && is_confluence && !alert_sent[3]
+5. CheckPremiumAlert(rp): score>=120 && is_confluence && !alert_sent[3]
 6. SendRPAlert(level, msg): Alert + SendNotification + Print + set alert_sent
 7. ResetAlertIfDistant(rp): distance >= reset_pips → reset alert_sent[0..3]
 ```
@@ -1361,6 +1361,13 @@ HTF Nesting Bonus chi tiết:
 | 19 | Utils | **g_cached_atr14_smooth**: EMA(period=10) of ATR14, updated per bar | **HIGH**: stable scoring baseline |
 | 20 | Scoring | CalcBaseScore reaction strength uses smoothed ATR | **HIGH**: no spike-induced score swing |
 | 21 | Scoring | CalcZonePrecisionScore width_ratio uses smoothed ATR | **HIGH**: consistent zone quality grading |
+
+#### Score Cap & Level Thresholds
+
+| # | File | Feature | Impact |
+|---|------|---------|--------|
+| 22 | Defines | **SCORE_CAP**: 150 → 200 — more headroom for differentiation | **HIGH**: confluence zones no longer cluster at cap |
+| 23 | Utils | **ClassifyRPLevel**: Premium >=120 (was 110), LV1 >=85 (was 80) | **MEDIUM**: proportional threshold adjustment |
 
 ---
 

@@ -113,7 +113,7 @@ input ENUM_TIMEFRAMES  HTF_2                  = PERIOD_D1;  // Higher TF 2
 //--- Display
 input int              Zone_Width_Pips        = 4;       // Zone width in pips
 input int              Min_Score_To_Show      = 40;      // Min score to display
-input bool             Show_Premium           = true;    // Show Premium zones (score>=110)
+input bool             Show_Premium           = true;    // Show Premium zones (score>=120)
 input bool             Show_Level1            = false;   // Show Level 1 zones (score>=80)
 input bool             Show_Level2            = false;   // Show Level 2 zones (score>=60)
 input bool             Show_Level3            = false;   // Show Level 3 zones (score>=40)

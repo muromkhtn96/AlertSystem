@@ -137,7 +137,7 @@ bool CheckPremiumAlert(int rp_index)
 {
    SReactionPoint rp = g_rp_array[rp_index];
    if(rp.alert_sent[3]) return false;
-   if(rp.final_score < 110.0) return false;
+   if(rp.final_score < 120.0) return false;
    if(!rp.is_confluence) return false;
 
    //--- Count TFs aligned
@@ -208,7 +208,7 @@ void CheckAllAlerts()
       if(g_alert_only_active_sessions && g_current_session == SESSION_DEAD)
          continue;
 
-      bool is_premium_conf = (rp.final_score >= 110.0 && rp.is_confluence);
+      bool is_premium_conf = (rp.final_score >= 120.0 && rp.is_confluence);
 
       //--- Level 4: Premium (always alerts, even in choppy/news)
       if(!rp.alert_sent[3])

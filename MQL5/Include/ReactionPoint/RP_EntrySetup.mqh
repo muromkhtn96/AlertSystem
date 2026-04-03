@@ -359,8 +359,8 @@ void CheckEntryConditions()
       if(pattern == PATTERN_NONE)
          continue;
 
-      //--- c) Regime not choppy (exception: Premium Confluence score >= 110)
-      if(g_current_regime == REGIME_CHOPPY && rp.final_score < 110.0)
+      //--- c) Regime not choppy (exception: Premium Confluence score >= 120)
+      if(g_current_regime == REGIME_CHOPPY && rp.final_score < 120.0)
          continue;
 
       //--- d) Spread not blocked
@@ -371,10 +371,10 @@ void CheckEntryConditions()
       if(g_news_blackout)
          continue;
 
-      //--- f) Trend alignment (P20) — exception: Premium score >= 110
+      //--- f) Trend alignment (P20) — exception: Premium score >= 120
       if(g_use_trend_alignment && !IsTrendAligned(rp.rp_type))
       {
-         if(rp.final_score < 110.0)
+         if(rp.final_score < 120.0)
             continue;
       }
 
