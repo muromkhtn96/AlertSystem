@@ -237,6 +237,7 @@ void MarkNearestRPSweep(double sweep_price)
 
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
       if(!g_rp_array[i].is_active) continue;
       double dist = MathAbs(g_rp_array[i].price - sweep_price);
       if(dist < min_dist)
@@ -246,10 +247,11 @@ void MarkNearestRPSweep(double sweep_price)
       }
    }
 
-   if(best_idx >= 0 && PriceToPips(min_dist) <= g_zone_width_pips * 2.0)
+   if(best_idx >= 0 && SafeRP(best_idx) && PriceToPips(min_dist) <= g_zone_width_pips * 2.0)
    {
       g_rp_array[best_idx].has_liquidity_sweep = true;
-      g_rp_dirty[best_idx] = true;
+      if(SafeDirty(best_idx))
+         g_rp_dirty[best_idx] = true;
    }
 }
 

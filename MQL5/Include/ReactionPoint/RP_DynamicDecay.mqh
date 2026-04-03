@@ -142,6 +142,7 @@ void UpdateAllDecay()
 
    for(int i = 0; i < g_rp_count; i++)
    {
+      if(!SafeRP(i)) break;
       if(!g_rp_array[i].is_active) continue;
 
       //--- Use iBarShift for accurate age calculation (bar_formed drifts)

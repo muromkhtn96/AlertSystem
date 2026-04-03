@@ -114,6 +114,8 @@ bool   g_use_confluence_zones    = true;
 
 // Module E — Session
 int    g_utc_offset              = 3;
+int    g_utc_offset_auto         = 0;      // Auto-detected UTC offset (DST-aware)
+bool   g_utc_offset_auto_valid   = false;  // true when auto-detection succeeded
 bool   g_show_session_background = true;
 
 // Module F — News
@@ -129,6 +131,9 @@ double g_spread_block_multiplier = 3.0;
 // Module H — Market Structure
 bool   g_use_market_structure    = true;
 int    g_structure_lookback_bars = 50;
+
+// Data Logger
+bool   g_use_logger                 = false;   // Moved here from RP_Logger.mqh for cross-module access
 
 // Clean Chart Mode
 bool   g_clean_chart_mode           = true;
@@ -208,6 +213,33 @@ bool   g_confluence_needs_redraw = false;
 
 // Alert throttle
 double g_last_alert_check_price = 0.0;
+
+//+------------------------------------------------------------------+
+//| SafeRP — bounds-checked access to g_rp_array                     |
+//| Returns true if rp_index is valid for read/write                 |
+//| Use in ALL hot paths: scoring, alerts, drawing, confluence       |
+//+------------------------------------------------------------------+
+bool SafeRP(int rp_index)
+{
+   if(rp_index < 0 || rp_index >= g_rp_count)
+      return false;
+   if(rp_index >= ArraySize(g_rp_array))
+   {
+      Print("ERROR: SafeRP — index ", rp_index,
+            " exceeds array size ", ArraySize(g_rp_array),
+            " (g_rp_count=", g_rp_count, ")");
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| SafeDirty — bounds-checked access to g_rp_dirty[]                |
+//+------------------------------------------------------------------+
+bool SafeDirty(int rp_index)
+{
+   return (rp_index >= 0 && rp_index < ArraySize(g_rp_dirty));
+}
 
 //+------------------------------------------------------------------+
 //| Anti-repainting access wrappers                                  |

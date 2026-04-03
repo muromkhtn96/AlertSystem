@@ -10,8 +10,8 @@
 
 //+------------------------------------------------------------------+
 //| Global — Logger state                                             |
+//| NOTE: g_use_logger is declared in RP_Utils.mqh (shared global)    |
 //+------------------------------------------------------------------+
-bool   g_use_logger        = false;
 int    g_log_handle_zones  = INVALID_HANDLE;
 int    g_log_handle_tests  = INVALID_HANDLE;
 int    g_log_handle_outcomes = INVALID_HANDLE;
@@ -235,6 +235,7 @@ bool LogZoneCreated(const SReactionPoint &rp)
       Print("RP_Logger: LogZoneCreated write error ", err, " for rp_id=", rp.id);
       return false;
    }
+
    return true;
 }
 
