@@ -277,6 +277,63 @@ struct SFiboLeg
 };
 
 //+------------------------------------------------------------------+
+//| SPairProfile — centralized pair-specific parameter overrides      |
+//|                                                                    |
+//| All pair-specific tuning lives HERE. To add a new pair:            |
+//|   1. Add detection flag (g_is_xxx_pair) in RP_Utils.mqh            |
+//|   2. Add a case block in BuildPairProfile() in RP_Utils.mqh        |
+//|   3. That's it — all modules read from g_pair_profile              |
+//|                                                                    |
+//| Session adjustments per session type:                              |
+//|   Index 0=Asian, 1=London_Open, 2=London, 3=NY_Open,              |
+//|         4=NY, 5=Overlap, 6=Dead                                    |
+//+------------------------------------------------------------------+
+struct SPairProfile
+{
+   //--- Session score adjustments (indexed by ENUM_SESSION ordinal)
+   double session_adj[7];
+
+   //--- ADX thresholds
+   double adx_strong;           // ADX strong trend threshold override
+   double adx_weak;             // ADX weak trend threshold override
+
+   //--- Decay tuning
+   int    decay_points;         // Points lost per decay interval
+   int    max_age_bars;         // Max zone age in bars (0 = use preset default)
+
+   //--- Volume scoring thresholds (tick volume / MA20 ratios)
+   double vol_extreme;          // Extreme volume spike threshold
+   double vol_strong;           // Strong volume threshold
+   double vol_above;            // Above average threshold
+
+   //--- Test quality tuning
+   double test_penalty_per;     // Penalty per excess test beyond 2
+   double test_2nd_score;       // Score for 2nd test
+
+   //--- Zone precision
+   int    min_score_override;   // Override min_score_to_show (0 = use preset default)
+
+   //--- Identity
+   string name;                 // For logging
+
+   void Init()
+   {
+      ArrayInitialize(session_adj, 0.0);
+      adx_strong         = 0.0;     // 0 = use input/preset default
+      adx_weak           = 0.0;
+      decay_points       = 0;       // 0 = use preset default
+      max_age_bars       = 0;
+      vol_extreme        = 2.0;
+      vol_strong         = 1.5;
+      vol_above          = 1.2;
+      test_penalty_per   = 5.0;
+      test_2nd_score     = 5.0;
+      min_score_override = 0;
+      name               = "DEFAULT";
+   }
+};
+
+//+------------------------------------------------------------------+
 //| SHTFTrend — Higher timeframe trend cache                         |
 //+------------------------------------------------------------------+
 struct SHTFTrend
