@@ -91,6 +91,7 @@ zone_width_pips, atr14_pips, width_atr_ratio,
 pattern(PINBAR/ENGULFING/OUTSIDE_BAR/LARGE_WICK),
 reaction_pips, volume_ratio, session(SESSION_*), regime(REGIME_*),
 has_wick_filter(Y/N), is_order_block(Y/N),
+has_sweep(Y/N), sweep_vol_ratio(double),
 base_score, final_score, level(RP_PREMIUM/RP_LEVEL1/RP_LEVEL2/RP_LEVEL3/RP_HIDDEN)
 
 **{SYMBOL}_{PERIOD}_tests.csv** — Zone test events:
@@ -105,6 +106,7 @@ rp_id, type, score_at_test, test_count,
 max_favorable_pips, max_adverse_pips, bars_to_max_favorable,
 outcome(STRONG_REACT/WEAK_REACT/FAILED/BROKEN/NEUTRAL),
 session, regime, pattern, has_wick_filter,
+has_sweep, sweep_vol_ratio,
 strong_tests, weak_tests, zone_width_pips, width_atr_ratio
 
 ### Outcome definitions
